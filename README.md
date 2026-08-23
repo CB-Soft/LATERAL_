@@ -43,6 +43,10 @@ Behavior therefore depends on the NX789J firmware, Android build, and the connec
 
 ## Build and install
 
+See the complete [installation guide](docs/INSTALLATION.md) for the published
+APK, source builds, VITURE SDK setup, Wireless debugging pairing, and
+troubleshooting.
+
 From the repository root:
 
 ```powershell
