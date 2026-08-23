@@ -8,11 +8,15 @@ Other phones, Android versions, glasses, displays, and firmware revisions are
 untested. Hosted-app behavior depends on Android's privileged virtual-display
 and IME services, so re-test after system updates.
 
-## Install the published APK
+## Install a local debug build
 
-1. On the phone, enable **Developer options** and **Wireless debugging**.
-2. Download `app-debug.apk` from the [v0.1.0 GitHub release](https://github.com/CB-Soft/LATERAL_/releases/tag/v0.1.0).
-3. Allow the browser or file manager to install that APK, then install it.
+LATERAL_ does not distribute an APK because the build contains the proprietary
+VITURE runtime. Build it locally after obtaining the SDK under VITURE's terms,
+then install the resulting debug APK:
+
+1. Follow **Build from source** below.
+2. On the phone, enable **Developer options** and **Wireless debugging**.
+3. Run `adb install -r app\build\outputs\apk\debug\app-debug.apk`.
 4. Connect the Beast glasses and launch LATERAL_ from the phone.
 5. In PhoneUI, pair/start the privileged helper when prompted. Use Android's
    Wireless debugging **pair with code** flow and submit the code in the
@@ -21,7 +25,6 @@ and IME services, so re-test after system updates.
    the external display; hosted apps and display controls are selected from
    PhoneUI.
 
-The release APK is a debug-signed development build, not a Play Store build.
 Normal phone apps remain phone-hosted; only apps explicitly hosted through the
 Beast workspace are moved to the external display.
 
@@ -57,7 +60,7 @@ From the LATERAL_ repository root:
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Then follow the published-APK first-use steps above. A source build still
+Then follow the first-use steps above. A source build still
 requires a connected Beast for the VITURE-specific controls and Wireless
 debugging pairing for hosted apps.
 
