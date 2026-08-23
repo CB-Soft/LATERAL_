@@ -100,6 +100,7 @@ Ultrawide mode is detected from the connected display. LATERAL_ corrects for the
 - `app/src/main/java/com/lateral/privileged/` — shell helper, trusted displays, task operations, and input injection.
 - `docs/BEAST_UI.md` — BeastUI architecture and invariants.
 - `LATERAL_ Outline.md` — product/design reference.
+- `docs/ROADMAP.md` — planned SDK-free monitor release and future work.
 
 ## Troubleshooting
 
