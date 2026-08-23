@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">LATERAL_</string>
+    <string name="privilege_pairing_hint">6-digit pairing code</string>
+    <string name="privilege_action_pair">Pair</string>
+    <string name="privilege_notification_title">LATERAL_ input setup</string>
+    <string name="privilege_notification_text">Enter the Wireless Debugging pairing code without closing its dialog.</string>
+    <string name="privilege_notification_channel">Privileged input setup</string>
+    <string name="privilege_notification_channel_desc">Pairs LATERAL_ with the local Android wireless-debugging service.</string>
+    <string name="btn_scan_displays">Scan Displays</string>
+    <string name="btn_launch_settings">Launch Settings on Glasses</string>
+    <string name="msg_no_external_display">No external display found.</string>
+    <string name="msg_attempted_launch">Attempted launch on display %1$d</string>
+    <string name="msg_launch_failed">FAILED:\n%1$s\n%2$s</string>
+    <string name="accessibility_description">Controls applications running on an external display.</string>
+</resources>
