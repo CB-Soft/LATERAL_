@@ -4,6 +4,7 @@
 package com.lateral.privileged;
 
 import android.view.Surface;
+import android.os.IBinder;
 import com.lateral.privileged.IPrivilegedHotkeyListener;
 
 interface IPrivilegedService {
@@ -59,6 +60,22 @@ interface IPrivilegedService {
 
     /** Diagnostic from the most recent IME-routing failure. */
     String getImeRoutingError() = 36;
+
+    /** Current served editor for displayId: [focused, inputType, imeOptions]. */
+    int[] getFocusedEditorInfo(int displayId) = 40;
+
+    /**
+     * Enable and select a session-scoped IME. Result is
+     * [resultCode, previousImeId, selectedImeId]. The helper links to ownerToken
+     * and restores previousImeId if the app process dies.
+     */
+    String[] beginSessionInputMethod(String imeId, IBinder ownerToken) = 43;
+
+    /** Restore previousImeId only while sessionImeId is still selected. */
+    int restoreSessionInputMethod(String sessionImeId, String previousImeId) = 44;
+
+    /** Versioned selected/served IME metadata; never contains editor text. */
+    String getImeClientSnapshot() = 45;
 
     /**
      * Create a *trusted* virtual display rendering into surface. Created from this shell-uid

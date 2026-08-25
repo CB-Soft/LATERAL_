@@ -24,6 +24,7 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.Display
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.View
@@ -63,6 +64,15 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     private val virtualDisplays = HashMap<Int, VirtualDisplay>()
     @Volatile private var lastImeRoutingError = ""
     private val imePolicyLock = Any()
+    private val sessionImeLock = Any()
+    private var sessionImeId: String? = null
+    private var sessionPreviousImeId: String? = null
+    private var sessionOwner: IBinder? = null
+    private val sessionOwnerDeath = IBinder.DeathRecipient {
+        synchronized(sessionImeLock) {
+            restoreSessionImeInternal("owner binder died")
+        }
+    }
     private var forcedDesktopModeOriginal: Int? = null
 
     private val audioRoutingLock = Any()
@@ -84,14 +94,17 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     @Suppress("unused")
     constructor(context: Context) : this() {
         this.context = context
+        recoverPersistedSessionIme()
     }
 
     /** Used by [main] to set the system context once the ActivityThread is up. */
     internal fun setContext(context: Context) {
         this.context = context
+        recoverPersistedSessionIme()
     }
 
     override fun destroy() {
+        synchronized(sessionImeLock) { restoreSessionImeInternal("helper shutdown") }
         clearPhoneTouchGuard()
         phoneGuardHandler.removeCallbacksAndMessages(null)
         setBeastMediaRoutingEnabled(false)
@@ -345,6 +358,189 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun text(displayId: Int, value: String) {
         run("input", "-d", displayId.toString(), "text", value)
+    }
+
+    override fun getFocusedEditorInfo(displayId: Int): IntArray {
+        val dump = runCapture("dumpsys", "input_method")
+            ?: return intArrayOf(0, 0, 0)
+        val clientDisplay = CURRENT_IME_CLIENT.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        if (clientDisplay != displayId) return intArrayOf(0, 0, 0)
+        val served = dump.substringAfter("mServedInputConnection=", "")
+            .lineSequence().firstOrNull()?.trim().orEmpty()
+        if (served.isBlank() || served.startsWith("null", ignoreCase = true)) {
+            return intArrayOf(0, 0, 0)
+        }
+
+        val editorBlock = dump.substringAfter("mCurrentEditorInfo:", "")
+        val match = EDITOR_INFO.find(editorBlock) ?: return intArrayOf(0, 0, 0)
+        val inputType = match.groupValues.getOrNull(1)?.toIntOrNull(16) ?: 0
+        if (inputType == 0) return intArrayOf(0, 0, 0)
+        val imeOptions = match?.groupValues?.getOrNull(2)?.toIntOrNull(16) ?: 0
+        return intArrayOf(1, inputType, imeOptions)
+    }
+
+    override fun beginSessionInputMethod(imeId: String, ownerToken: IBinder): Array<String> =
+        synchronized(sessionImeLock) {
+            val selectedBefore = selectedInputMethod()
+            if (selectedBefore.isBlank()) {
+                return@synchronized arrayOf(IME_SESSION_QUERY_FAILED.toString(), "", "")
+            }
+
+            if (sessionImeId != null && sessionImeId != imeId) {
+                restoreSessionImeInternal("replaced by new session")
+            }
+
+            unlinkSessionOwner()
+            try {
+                ownerToken.linkToDeath(sessionOwnerDeath, 0)
+                sessionOwner = ownerToken
+            } catch (_: RemoteException) {
+                return@synchronized arrayOf(
+                    IME_SESSION_OWNER_DEAD.toString(), selectedBefore, selectedInputMethod(),
+                )
+            }
+
+            val previous = when {
+                sessionImeId == imeId && !sessionPreviousImeId.isNullOrBlank() ->
+                    sessionPreviousImeId.orEmpty()
+                selectedBefore != imeId -> selectedBefore
+                else -> ""
+            }
+            sessionImeId = imeId
+            sessionPreviousImeId = previous
+            if (previous.isNotBlank() && !persistSessionImeState(imeId, previous)) {
+                clearSessionImeState()
+                return@synchronized arrayOf(
+                    IME_SESSION_QUERY_FAILED.toString(), previous, selectedInputMethod(),
+                )
+            }
+
+            if (selectedBefore != imeId) {
+                if (!run("ime", "enable", imeId)) {
+                    clearSessionImeState()
+                    return@synchronized arrayOf(
+                        IME_SESSION_ENABLE_FAILED.toString(), previous, selectedInputMethod(),
+                    )
+                }
+                if (!run("ime", "set", imeId)) {
+                    restoreSessionImeInternal("selection command failed")
+                    return@synchronized arrayOf(
+                        IME_SESSION_SELECT_FAILED.toString(), previous, selectedInputMethod(),
+                    )
+                }
+            }
+
+            val verified = waitForSelectedIme(imeId)
+            if (!verified) {
+                restoreSessionImeInternal("activation verification failed")
+                return@synchronized arrayOf(
+                    IME_SESSION_VERIFY_FAILED.toString(), previous, selectedInputMethod(),
+                )
+            }
+            arrayOf(IME_SESSION_SUCCESS.toString(), previous, imeId)
+        }
+
+    override fun restoreSessionInputMethod(sessionImeId: String, previousImeId: String): Int =
+        synchronized(sessionImeLock) {
+            val current = selectedInputMethod()
+            if (current != sessionImeId) {
+                clearSessionImeState()
+                return@synchronized IME_SESSION_NOT_SELECTED
+            }
+            if (previousImeId.isBlank() || previousImeId == sessionImeId) {
+                clearSessionImeState()
+                return@synchronized IME_SESSION_NO_PREVIOUS
+            }
+            this.sessionImeId = sessionImeId
+            this.sessionPreviousImeId = previousImeId
+            if (restoreSessionImeInternal("explicit app restore")) {
+                IME_SESSION_SUCCESS
+            } else IME_SESSION_RESTORE_FAILED
+        }
+
+    override fun getImeClientSnapshot(): String {
+        val dump = runCapture("dumpsys", "input_method").orEmpty()
+        val selected = selectedInputMethod()
+        val displayId = CURRENT_IME_CLIENT.find(dump)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
+        val editorBlock = dump.substringAfter("mCurrentEditorInfo:", "")
+        val editor = EDITOR_INFO.find(editorBlock)
+        val inputType = editor?.groupValues?.getOrNull(1)?.toIntOrNull(16) ?: 0
+        val imeOptions = editor?.groupValues?.getOrNull(2)?.toIntOrNull(16) ?: 0
+        val packageName = EDITOR_PACKAGE.find(editorBlock)?.groupValues?.getOrNull(1).orEmpty()
+        val taskId = if (displayId >= 0) taskOnDisplay(displayId) ?: -1 else -1
+        return listOf(
+            "v1", selected, displayId.toString(), taskId.toString(), packageName,
+            inputType.toString(), imeOptions.toString(),
+        ).joinToString("|")
+    }
+
+    private fun selectedInputMethod(): String =
+        runCapture("settings", "get", "secure", "default_input_method")
+            ?.trim().orEmpty().takeUnless { it == "null" }.orEmpty()
+
+    private fun waitForSelectedIme(expected: String): Boolean {
+        repeat(IME_SESSION_VERIFY_ATTEMPTS) {
+            if (selectedInputMethod() == expected) return true
+            try {
+                Thread.sleep(IME_SESSION_VERIFY_INTERVAL_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return false
+    }
+
+    private fun restoreSessionImeInternal(reason: String): Boolean {
+        val active = sessionImeId
+        val previous = sessionPreviousImeId
+        val current = selectedInputMethod()
+        val shouldRestore = !active.isNullOrBlank() && !previous.isNullOrBlank() &&
+            previous != active && current == active
+        val restored = !shouldRestore || (
+            run("ime", "enable", previous!!) && run("ime", "set", previous) &&
+                waitForSelectedIme(previous)
+            )
+        Log.i(TAG, "session IME cleanup ($reason): restored=$restored current=$current")
+        clearSessionImeState()
+        return restored
+    }
+
+    private fun persistSessionImeState(active: String, previous: String): Boolean =
+        run("settings", "put", "secure", IME_SESSION_ACTIVE_SETTING, active) &&
+            run("settings", "put", "secure", IME_SESSION_PREVIOUS_SETTING, previous)
+
+    private fun recoverPersistedSessionIme() = synchronized(sessionImeLock) {
+        val active = runCapture(
+            "settings", "get", "secure", IME_SESSION_ACTIVE_SETTING,
+        )?.trim().orEmpty().takeUnless { it == "null" }.orEmpty()
+        val previous = runCapture(
+            "settings", "get", "secure", IME_SESSION_PREVIOUS_SETTING,
+        )?.trim().orEmpty().takeUnless { it == "null" }.orEmpty()
+        if (active.isBlank() || previous.isBlank()) {
+            clearPersistedSessionImeState()
+            return@synchronized
+        }
+        sessionImeId = active
+        sessionPreviousImeId = previous
+        restoreSessionImeInternal("cold helper recovery")
+    }
+
+    private fun unlinkSessionOwner() {
+        sessionOwner?.let { runCatching { it.unlinkToDeath(sessionOwnerDeath, 0) } }
+        sessionOwner = null
+    }
+
+    private fun clearSessionImeState() {
+        unlinkSessionOwner()
+        sessionImeId = null
+        sessionPreviousImeId = null
+        clearPersistedSessionImeState()
+    }
+
+    private fun clearPersistedSessionImeState() {
+        run("settings", "delete", "secure", IME_SESSION_ACTIVE_SETTING)
+        run("settings", "delete", "secure", IME_SESSION_PREVIOUS_SETTING)
     }
 
     /**
@@ -695,27 +891,40 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     }
 
     override fun clickTouch(displayId: Int, x: Int, y: Int) {
+        injectTouchClick(displayId, x, y)
+    }
+
+    private fun injectTouchClick(
+        displayId: Int,
+        x: Int,
+        y: Int,
+        waitForFinish: Boolean = false,
+    ): Boolean {
         try {
             val injector = obtainInjector() ?: run {
                 Log.e(TAG, "tap: InputManager unavailable")
-                return
+                return false
             }
             val downAt = SystemClock.uptimeMillis()
             val point = floatArrayOf(x.toFloat(), y.toFloat())
-            injectMotionEvent(
+            val downInjected = injectMotionEvent(
                 injector, displayId, downAt, downAt, MotionEvent.ACTION_DOWN, point, null,
+                injectionMode = if (waitForFinish) 2 else 0,
             )
             try {
                 Thread.sleep(CLICK_HOLD_MS)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
-            injectMotionEvent(
+            val upInjected = injectMotionEvent(
                 injector, displayId, downAt, SystemClock.uptimeMillis(),
                 MotionEvent.ACTION_UP, point, null,
+                injectionMode = if (waitForFinish) 2 else 0,
             )
+            return downInjected && upInjected
         } catch (t: Throwable) {
             Log.e(TAG, "atomic touch tap failed", t)
+            return false
         }
     }
 
@@ -818,6 +1027,20 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         @Suppress("UNCHECKED_CAST")
         return (method.invoke(service, *args) as? List<Any>).orEmpty()
     }
+
+    private fun taskOnDisplay(displayId: Int): Int? = runCatching {
+        val tasks = readRunningTasks(activityTaskManagerService()).filter {
+            taskField(it, "displayId").intValue(-1) == displayId
+        }
+        val task = tasks.firstOrNull {
+            taskField(it, "isFocused") as? Boolean == true
+        } ?: tasks.firstOrNull {
+            taskField(it, "isVisible") as? Boolean == true
+        } ?: tasks.firstOrNull()
+        taskField(task, "taskId", "id").intValue(-1).takeIf { it >= 0 }
+    }.onFailure {
+        Log.w(TAG, "could not resolve task on display $displayId", it)
+    }.getOrNull()
 
     private fun encodeTaskSnapshot(info: Any?, running: Map<Int, Any>, rank: Int): String? {
         info ?: return null
@@ -1205,6 +1428,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         action: Int,
         p0: FloatArray,
         p1: FloatArray?,
+        injectionMode: Int = 0,
     ): Boolean {
         val count = if (p1 == null) 1 else 2
         val props = Array(count) { idx ->
@@ -1246,9 +1470,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             android.view.InputEvent::class.java,
             Int::class.javaPrimitiveType,
         )
-        // 0 = INJECT_INPUT_EVENT_MODE_ASYNC. Returns Boolean — false means the
+        // 0 = ASYNC, 2 = WAIT_FOR_FINISH. Returns Boolean — false means the
         // dispatcher rejected the event (permission, no window, wrong display, …).
-        val result = injectMethod.invoke(injector, event, 0)
+        val result = injectMethod.invoke(injector, event, injectionMode)
         event.recycle()
         return (result as? Boolean) ?: false
     }
@@ -2139,6 +2363,22 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         private const val NATIVE_MOUSE_PORT = "lateral-pointer"
         private const val CLICK_HOLD_MS = 32L
         private const val DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1
+        private val CURRENT_IME_CLIENT = Regex("mCurClient=.*?mSelfReportedDisplayId=(\\d+)")
+        private val EDITOR_INFO = Regex("inputType=0x([0-9a-fA-F]+)\\s+imeOptions=0x([0-9a-fA-F]+)")
+        private val EDITOR_PACKAGE = Regex("packageName=([^\\s}]+)")
+        private const val IME_SESSION_SUCCESS = 0
+        private const val IME_SESSION_QUERY_FAILED = 1
+        private const val IME_SESSION_ENABLE_FAILED = 2
+        private const val IME_SESSION_SELECT_FAILED = 3
+        private const val IME_SESSION_VERIFY_FAILED = 4
+        private const val IME_SESSION_OWNER_DEAD = 5
+        private const val IME_SESSION_NOT_SELECTED = 6
+        private const val IME_SESSION_NO_PREVIOUS = 7
+        private const val IME_SESSION_RESTORE_FAILED = 8
+        private const val IME_SESSION_VERIFY_ATTEMPTS = 20
+        private const val IME_SESSION_VERIFY_INTERVAL_MS = 50L
+        private const val IME_SESSION_ACTIVE_SETTING = "lateral_session_ime"
+        private const val IME_SESSION_PREVIOUS_SETTING = "lateral_session_previous_ime"
         private const val IME_POLICY_UNKNOWN = -1
         private const val IME_ROUTING_UNAVAILABLE = -2
         private const val IME_POLICY_VERIFY_ATTEMPTS = 16

@@ -817,8 +817,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         taskTabs.removeAllViews()
         tasks.forEachIndexed { index, task ->
             val focused = WorkspaceState.focusedTaskId == task.id
-            val numberColor = if (focused) Color.rgb(232, 247, 248) else Color.rgb(142, 155, 156)
-            val labelColor = if (focused) Color.rgb(164, 223, 229) else Color.rgb(98, 111, 112)
+            val numberColor = if (focused) Color.rgb(232, 247, 248) else Color.WHITE
+            val labelColor = if (focused) Color.rgb(164, 223, 229) else Color.WHITE
             val focusRule = View(this).apply {
                 setBackgroundColor(if (focused) ACCENT else Color.TRANSPARENT)
             }

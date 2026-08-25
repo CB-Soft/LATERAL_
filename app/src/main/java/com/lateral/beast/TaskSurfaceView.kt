@@ -73,6 +73,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     private var routedSecondaryClick = false
     private var routedPointerX = 0
     private var routedPointerY = 0
+    private var editorProbeGeneration = 0
 
     init {
         surfaceTextureListener = this
@@ -213,8 +214,10 @@ class TaskSurfaceView @JvmOverloads constructor(
         val local = localPointForGlobal(globalX, globalY) ?: return false
         onInteraction?.invoke()
         when (button) {
-            MotionEvent.BUTTON_PRIMARY ->
+            MotionEvent.BUTTON_PRIMARY -> {
                 PrivilegedService.clickTouch(id, local.first, local.second)
+                scheduleEditorProbe(id)
+            }
             MotionEvent.BUTTON_SECONDARY, MotionEvent.BUTTON_TERTIARY ->
                 PrivilegedService.clickMouse(id, local.first, local.second, button)
             else -> return false
@@ -274,6 +277,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                     PrivilegedService.injectTouch(
                         id, routedPointerX, routedPointerY, MotionEvent.ACTION_UP,
                     )
+                    scheduleEditorProbe(id)
                 } else if (routedSecondaryClick) {
                     PrivilegedService.clickMouse(id, routedPointerX, routedPointerY, button)
                 } else {
@@ -507,6 +511,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                             // A tap crosses the physical Beast display and this hosted
                             // virtual display. Pair the final DOWN/UP in one helper call.
                             PrivilegedService.clickTouch(id, event.x.toInt(), event.y.toInt())
+                            scheduleEditorProbe(id)
                         }
                         primaryMouseDown = false
                         primaryMouseStreamed = false
@@ -531,7 +536,46 @@ class TaskSurfaceView @JvmOverloads constructor(
             else -> MotionEvent.ACTION_CANCEL
         }
         PrivilegedService.injectTouch(id, event.x.toInt(), event.y.toInt(), action)
+        if (action == MotionEvent.ACTION_UP) {
+            scheduleEditorProbe(id)
+        }
         return true
+    }
+
+    private fun scheduleEditorProbe(displayId: Int) {
+        val generation = ++editorProbeGeneration
+        fun probe(attempt: Int) {
+            if (released || generation != editorProbeGeneration || this.displayId != displayId) return
+            PrivilegedService.queryFocusedEditor(displayId) { editor ->
+                if (released || generation != editorProbeGeneration || this.displayId != displayId) {
+                    return@queryFocusedEditor
+                }
+                if (editor != null) {
+                    val item = task ?: return@queryFocusedEditor
+                    HostedTextInputSession.begin(
+                        HostedTextInputSession.Target(
+                            displayId = displayId,
+                            taskId = item.id,
+                            androidTaskId = item.androidTaskId ?: item.id.toInt(),
+                            packageName = item.packageName,
+                            label = item.shortLabel.ifBlank { item.label },
+                            inputType = editor.inputType,
+                            imeOptions = editor.imeOptions,
+                        ),
+                    )
+                } else {
+                    if (attempt < EDITOR_PROBE_DELAYS_MS.lastIndex) {
+                        mainHandler.postDelayed(
+                            { probe(attempt + 1) },
+                            EDITOR_PROBE_DELAYS_MS[attempt + 1],
+                        )
+                    } else {
+                        HostedTextInputSession.close(displayId)
+                    }
+                }
+            }
+        }
+        mainHandler.postDelayed({ probe(0) }, EDITOR_PROBE_DELAYS_MS[0])
     }
 
     private fun forwardGenericMotion(event: MotionEvent): Boolean {
@@ -563,7 +607,10 @@ class TaskSurfaceView @JvmOverloads constructor(
         released = true
         cancelRoutedPointer()
         mainHandler.removeCallbacksAndMessages(null)
-        displayId?.let { PrivilegedService.releaseVirtualDisplay(it) }
+        displayId?.let {
+            HostedTextInputSession.close(it)
+            PrivilegedService.releaseVirtualDisplay(it)
+        }
         displayId = null
         outputSurface?.release()
         outputSurface = null
@@ -575,6 +622,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         mainHandler.removeCallbacksAndMessages(null)
         val item = task
         val id = displayId
+        id?.let(HostedTextInputSession::close)
         if (item != null && id != null) RetainedTaskDisplays.retain(item.id, id)
         displayId = null
         outputSurface?.release()
@@ -648,5 +696,9 @@ class TaskSurfaceView @JvmOverloads constructor(
         private const val PINCH_DURATION_MS = 32
         private const val MIN_PINCH_SCALE = .5f
         private const val MAX_PINCH_SCALE = 2f
+        // A focused editor is commonly published within the first frame after the
+        // injected tap. Probe quickly, then back off; the old 75→275 ms cadence made
+        // the embedded keyboard feel needlessly late even when Floris was pre-warmed.
+        private val EDITOR_PROBE_DELAYS_MS = longArrayOf(40L, 80L, 160L, 320L)
     }
 }

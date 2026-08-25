@@ -51,6 +51,7 @@ android {
 }
 
 dependencies {
+    implementation("com.lateral.thirdparty:florisboard-embedded:0.5.2-lateral.1")
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

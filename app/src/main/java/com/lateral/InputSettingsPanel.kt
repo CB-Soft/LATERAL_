@@ -237,6 +237,26 @@ object InputSettingsPanel {
             setTextColor(Color.rgb(210, 220, 218))
             setPadding(0, dp(10), 0, 0)
         }
+        val about = TextView(context).apply {
+            text = "About / open-source licenses"
+            typeface = Typeface.MONOSPACE
+            setTextColor(InputSettings.accentColor)
+            setPadding(0, dp(18), 0, dp(18))
+            setOnClickListener {
+                android.app.AlertDialog.Builder(context)
+                    .setTitle("LATERAL_ / licenses")
+                    .setMessage(
+                        "Embedded keyboard: FlorisBoard v0.5.2\n" +
+                            "Copyright © FlorisBoard contributors\n\n" +
+                            "FlorisBoard and LATERAL_'s integration changes are licensed " +
+                            "under the Apache License 2.0. The complete license and " +
+                            "attribution are distributed in third_party/florisboard/LICENSE " +
+                            "and NOTICE.\n\nhttps://www.apache.org/licenses/LICENSE-2.0",
+                    )
+                    .setPositiveButton("Done", null)
+                    .show()
+            }
+        }
         panel.addView(sensitivityLabel)
         panel.addView(sensitivity)
         panel.addView(scrollSensitivity)
@@ -254,6 +274,7 @@ object InputSettingsPanel {
         panel.addView(accentPreview)
         panel.addView(resetAccent)
         panel.addView(note)
+        panel.addView(about)
         val scrollPanel = ScrollView(context).apply { addView(panel) }
         try {
             dialog = android.app.AlertDialog.Builder(context)

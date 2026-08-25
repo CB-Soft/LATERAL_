@@ -27,12 +27,14 @@ import com.lateral.beast.BeastActivity
 import com.lateral.beast.BeastDisplayModeController
 import com.lateral.beast.BeastWorkspaceController
 import com.lateral.beast.LauncherSearchSession
+import com.lateral.beast.HostedTextInputSession
 import com.lateral.beast.WorkspaceState
 import com.lateral.beast.AndroidTaskSynchronizer
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
+import dev.patrickgold.florisboard.embedded.EmbeddedFlorisKeyboardView
 
 class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     companion object {
@@ -60,7 +62,13 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     private lateinit var inputController: InputController
     private lateinit var displayManager: DisplayManager
-    private lateinit var beastSearchField: EditText
+    private lateinit var beastSearchField: PhoneProxyEditText
+    private lateinit var phoneProxyContainer: LinearLayout
+    private lateinit var phoneProxyClose: TextView
+    private lateinit var hostedKeyboardController: HostedKeyboardSessionController
+    private lateinit var embeddedKeyboardView: EmbeddedFlorisKeyboardView
+    private lateinit var embeddedKeyboardContainer: LinearLayout
+    private lateinit var embeddedKeyboardStatus: TextView
     private lateinit var connectionText: TextView
     private lateinit var currentAppText: TextView
     private lateinit var inputDebugText: TextView
@@ -82,6 +90,13 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             if (::beastSearchField.isInitialized) syncBeastSearchField()
         }
     }
+    private val hostedTextInputListener: () -> Unit = {
+        runOnUiThread {
+            if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
+            HostedTextInputSession.target?.let(hostedKeyboardController::begin)
+                ?: hostedKeyboardController.end("editor no longer active")
+        }
+    }
     private val workspaceGuard = object : Runnable {
         override fun run() {
             if (isFinishing || isDestroyed) return
@@ -101,6 +116,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 command.setTextColor(InputSettings.accentColor)
                 command.background = outlinedBackground(InputSettings.accentOutlineColor())
             }
+            if (::embeddedKeyboardView.isInitialized) {
+                embeddedKeyboardView.keyboardTheme = lateralKeyboardTheme()
+            }
             if (::workspaceNavigator.isInitialized) workspaceNavigator.invalidate()
             if (::workspaceViewportSlider.isInitialized) workspaceViewportSlider.invalidate()
         }
@@ -112,12 +130,18 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             }
             if (PrivilegedService.state == PrivilegedService.State.READY) {
                 BeastWorkspaceController.cleanupHistoricalTasks(this)
+            } else if (::hostedKeyboardController.isInitialized) {
+                hostedKeyboardController.onHelperUnavailable()
             }
             syncPairingNotification()
         }
     }
     private val workspaceStateListener: () -> Unit = {
         runOnUiThread {
+            HostedTextInputSession.target?.let { target ->
+                val task = WorkspaceState.tasks.firstOrNull { it.id == target.taskId }
+                if (task == null || task.minimized) HostedTextInputSession.close(target.displayId)
+            }
             if (::workspaceNavigator.isInitialized) {
                 workspaceNavigator.submitWorkspace(
                     WorkspaceState.tasks,
@@ -188,8 +212,16 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         displayManager = getSystemService(DisplayManager::class.java)
 
         buildUi()
+        hostedKeyboardController = HostedKeyboardSessionController(
+            context = this,
+            onStateChanged = ::onHostedKeyboardStateChanged,
+        )
         applyPhoneWindowFocusMode()
         LauncherSearchSession.addListener(beastSearchListener)
+        HostedTextInputSession.addListener(hostedTextInputListener)
+        hostedKeyboardController.recoverStaleSession {
+            HostedTextInputSession.target?.let(hostedKeyboardController::begin)
+        }
         syncBeastSearchField()
         updateExternalDisplay()
         // A Beast that was already plugged in before the PhoneUI launched will not
@@ -229,8 +261,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     override fun onDestroy() {
         if (::trackpad.isInitialized) trackpad.cancelActiveGesture()
         if (::inputController.isInitialized) inputController.cancelActiveButtons()
+        if (::hostedKeyboardController.isInitialized) hostedKeyboardController.destroy()
         resetPhoneWindowFocusLeases()
         LauncherSearchSession.removeListener(beastSearchListener)
+        HostedTextInputSession.removeListener(hostedTextInputListener)
         if (::connectionText.isInitialized) window.decorView.removeCallbacks(workspaceGuard)
         PrivilegedService.removeListener(privilegedStateListener)
         InputSettings.removeSensitivityListener(sensitivityListener)
@@ -259,6 +293,13 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (::trackpad.isInitialized) trackpad.cancelActiveGesture()
         if (::inputController.isInitialized) inputController.cancelActiveButtons()
         resetPhoneWindowFocusLeases()
+        if (::hostedKeyboardController.isInitialized) {
+            if (HostedTextInputSession.target != null) {
+                HostedTextInputSession.close()
+            } else {
+                hostedKeyboardController.end("PhoneUI paused")
+            }
+        }
         displayManager.unregisterDisplayListener(this)
         super.onPause()
     }
@@ -293,6 +334,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (previousDisplayId != externalDisplay?.displayId) {
             // Release the old stream before InputController swaps its target display.
             trackpad.cancelActiveGesture()
+            HostedTextInputSession.close()
         }
 
         val display = externalDisplay
@@ -342,6 +384,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     override fun onDisplayChanged(displayId: Int) {
+        if (externalDisplay?.displayId == displayId) HostedTextInputSession.close()
         updateExternalDisplay()
         // Some USB-C docks keep a Beast display object around while it is OFF, then
         // simply change its state to ON on the next plug-in. Treat that as a connect.
@@ -441,7 +484,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         addCommand(controls, "disp") { showExternalDisplaySettings() }
         addCommand(controls, "set") { showInputSettings() }
 
-        beastSearchField = EditText(this).apply {
+        beastSearchField = PhoneProxyEditText(this).apply {
             hint = "Beast app search"
             isSingleLine = true
             typeface = Typeface.MONOSPACE
@@ -456,6 +499,59 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 if (enter) LauncherSearchSession.submit()
                 enter
             }
+        }
+        phoneProxyClose = TextView(this).apply {
+            text = "done"
+            gravity = Gravity.CENTER
+            typeface = Typeface.MONOSPACE
+            setTextColor(ACCENT)
+            background = outlinedBackground(InputSettings.accentOutlineColor())
+            visibility = View.GONE
+            setOnClickListener { LauncherSearchSession.close() }
+        }
+        phoneProxyContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            addView(beastSearchField, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(phoneProxyClose, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
+                marginStart = dp(6)
+            })
+        }
+        embeddedKeyboardStatus = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 13f
+            setTextColor(Color.rgb(150, 162, 166))
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        val embeddedKeyboardClose = TextView(this).apply {
+            text = "close"
+            gravity = Gravity.CENTER
+            typeface = Typeface.MONOSPACE
+            setTextColor(ACCENT)
+            background = outlinedBackground(InputSettings.accentOutlineColor())
+            setOnClickListener { HostedTextInputSession.close() }
+        }
+        val embeddedKeyboardHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(embeddedKeyboardStatus, LinearLayout.LayoutParams(0, dp(38), 1f))
+            addView(embeddedKeyboardClose, LinearLayout.LayoutParams(dp(72), dp(36)))
+        }
+        embeddedKeyboardView = EmbeddedFlorisKeyboardView(this).apply {
+            keyboardTheme = lateralKeyboardTheme()
+            visibility = View.GONE
+        }
+        embeddedKeyboardContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(embeddedKeyboardHeader)
+            addView(
+                embeddedKeyboardView,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
         }
         root.addView(status)
         root.addView(rule())
@@ -483,29 +579,51 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         // The Beast/workspace view is kept at the bottom, separate from input controls.
         root.addView(rule())
         root.addView(workspaceNavigator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        root.addView(
+            embeddedKeyboardContainer,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
         // Keep the phone-owned search field at the bottom of the resized PhoneUI, directly
         // above the IME when it is visible, without covering the touchpad or task navigator.
-        root.addView(beastSearchField, LinearLayout.LayoutParams(
+        root.addView(phoneProxyContainer, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(48),
         ))
 
         setContentView(root)
+        // The keyboard remains GONE until an exact hosted editor is verified, but keeping
+        // its Compose tree prepared avoids a visible cold-composition pause on first use.
+        root.post { embeddedKeyboardView.precompose() }
     }
 
     private fun privilegedStatusText(): String = when {
         PrivilegedService.state != PrivilegedService.State.READY ->
             "Input bridge: ${PrivilegedService.state}"
-        PrivilegedService.imeRoutingState == PrivilegedService.ImeRoutingState.UNAVAILABLE ->
-            buildString {
-                append("Keyboard routing unavailable")
-                PrivilegedService.imeRoutingError.takeIf(String::isNotBlank)?.let {
-                    append(": ").append(it)
-                }
-            }
-        PrivilegedService.imeRoutingState == PrivilegedService.ImeRoutingState.CHECKING ->
-            "Input bridge: READY · keyboard routing checking"
-        else -> "Input bridge: READY · keyboard routes to phone"
+        else -> "Input bridge: READY · embedded keyboard available"
+    }
+
+    private fun onHostedKeyboardStateChanged(
+        state: HostedKeyboardSessionController.State,
+        detail: String?,
+    ) {
+        if (!::embeddedKeyboardContainer.isInitialized) return
+        val visible = state != HostedKeyboardSessionController.State.IDLE
+        embeddedKeyboardContainer.visibility = if (visible) View.VISIBLE else View.GONE
+        embeddedKeyboardView.visibility = if (
+            state == HostedKeyboardSessionController.State.ACTIVE
+        ) View.VISIBLE else View.GONE
+        embeddedKeyboardStatus.text = when (state) {
+            HostedKeyboardSessionController.State.IDLE -> ""
+            HostedKeyboardSessionController.State.ACTIVATING -> detail ?: "Connecting keyboard…"
+            HostedKeyboardSessionController.State.ACTIVE ->
+                "typing in ${HostedTextInputSession.target?.label.orEmpty()}"
+            HostedKeyboardSessionController.State.RESTORING -> "Closing keyboard…"
+            HostedKeyboardSessionController.State.UNAVAILABLE ->
+                detail ?: "Keyboard unavailable"
+        }
     }
 
     private fun phoneLabel() = TextView(this).apply {
@@ -546,6 +664,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun showControllerSettings() {
+        HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
         val entries = arrayOf(
             "Open Android settings on Beast",
@@ -574,6 +693,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun showInputSettings() {
+        HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
         InputSettingsPanel.show(
             context = this,
@@ -582,6 +702,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun showExternalDisplaySettings() {
+        HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
         ExternalDisplayPanel.show(
             context = this,
@@ -735,7 +856,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     /** Keeps Beast's query in PhoneUI without placing a modal window over the touchpad. */
     private fun syncBeastSearchField() {
         if (!LauncherSearchSession.active) {
+            phoneProxyContainer.visibility = View.GONE
             beastSearchField.visibility = View.GONE
+            phoneProxyClose.visibility = View.GONE
             if (beastSearchField.hasFocus()) {
                 beastSearchField.clearFocus()
                 (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
@@ -748,7 +871,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (beastSearchFocusLease == null) {
             beastSearchFocusLease = acquirePhoneWindowFocus()
         }
+        phoneProxyContainer.visibility = View.VISIBLE
         beastSearchField.visibility = View.VISIBLE
+        phoneProxyClose.visibility = View.GONE
         val query = LauncherSearchSession.query
         if (beastSearchField.text.toString() != query) {
             beastSearchField.setText(query)

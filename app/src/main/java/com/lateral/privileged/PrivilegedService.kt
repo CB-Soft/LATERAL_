@@ -90,6 +90,34 @@ object PrivilegedService {
         val isAvailable: Boolean,
     )
 
+    data class FocusedEditorInfo(val inputType: Int, val imeOptions: Int)
+
+    enum class SessionImeResult(val code: Int) {
+        SUCCESS(0), QUERY_FAILED(1), ENABLE_FAILED(2), SELECT_FAILED(3),
+        VERIFY_FAILED(4), OWNER_DEAD(5), NOT_SELECTED(6), NO_PREVIOUS(7),
+        RESTORE_FAILED(8), HELPER_UNAVAILABLE(-1), UNKNOWN(-2);
+
+        companion object {
+            fun fromCode(code: Int): SessionImeResult =
+                entries.firstOrNull { it.code == code } ?: UNKNOWN
+        }
+    }
+
+    data class SessionImeActivation(
+        val result: SessionImeResult,
+        val previousImeId: String,
+        val selectedImeId: String,
+    )
+
+    data class ImeClientSnapshot(
+        val selectedImeId: String,
+        val displayId: Int,
+        val taskId: Int,
+        val packageName: String,
+        val inputType: Int,
+        val imeOptions: Int,
+    )
+
     private const val TAG = "Lateral/Privileged"
 
     /** Steps the user (or UxSpace) must clear before privileged calls work. */
@@ -651,6 +679,13 @@ object PrivilegedService {
             .getOrDefault(false)
     }
 
+    fun focusPhoneTaskAsync(taskId: Int, callback: (Boolean) -> Unit) {
+        worker.execute {
+            val focused = startRecentTaskOnDisplay(taskId, android.view.Display.DEFAULT_DISPLAY)
+            mainHandler.post { callback(focused) }
+        }
+    }
+
     /** Exact-task move + PhoneUI recovery, executed as one helper-side transaction. */
     fun restoreTaskPreservingPhoneFocus(
         taskId: Int,
@@ -822,6 +857,70 @@ object PrivilegedService {
     fun key(displayId: Int, keyCode: Int) = onWorker { service?.key(displayId, keyCode) }
 
     fun text(displayId: Int, value: String) = onWorker { service?.text(displayId, value) }
+
+    fun queryFocusedEditor(displayId: Int, callback: (FocusedEditorInfo?) -> Unit) {
+        worker.execute {
+            val raw = runCatching { service?.getFocusedEditorInfo(displayId) }.getOrNull()
+            val result = if (raw != null && raw.size >= 3 && raw[0] == 1) {
+                FocusedEditorInfo(raw[1], raw[2])
+            } else null
+            mainHandler.post { callback(result) }
+        }
+    }
+
+    fun beginSessionInputMethod(
+        imeId: String,
+        ownerToken: IBinder,
+        callback: (SessionImeActivation) -> Unit,
+    ) {
+        worker.execute {
+            val raw = runCatching { service?.beginSessionInputMethod(imeId, ownerToken) }
+                .onFailure { Log.e(TAG, "session IME activation failed", it) }
+                .getOrNull()
+            val activation = if (raw != null && raw.size >= 3) {
+                SessionImeActivation(
+                    SessionImeResult.fromCode(raw[0].toIntOrNull() ?: -2),
+                    raw[1], raw[2],
+                )
+            } else {
+                SessionImeActivation(SessionImeResult.HELPER_UNAVAILABLE, "", "")
+            }
+            mainHandler.post { callback(activation) }
+        }
+    }
+
+    fun restoreSessionInputMethod(
+        sessionImeId: String,
+        previousImeId: String,
+        callback: ((SessionImeResult) -> Unit)? = null,
+    ) {
+        worker.execute {
+            val result = runCatching {
+                service?.restoreSessionInputMethod(sessionImeId, previousImeId)
+                    ?.let(SessionImeResult::fromCode)
+            }.onFailure { Log.e(TAG, "session IME restore failed", it) }
+                .getOrNull() ?: SessionImeResult.HELPER_UNAVAILABLE
+            callback?.let { mainHandler.post { it(result) } }
+        }
+    }
+
+    fun getImeClientSnapshot(callback: (ImeClientSnapshot?) -> Unit) {
+        worker.execute {
+            val raw = runCatching { service?.imeClientSnapshot }.getOrNull()
+            val fields = raw?.split('|')
+            val snapshot = if (fields != null && fields.size >= 7 && fields[0] == "v1") {
+                ImeClientSnapshot(
+                    selectedImeId = fields[1],
+                    displayId = fields[2].toIntOrNull() ?: -1,
+                    taskId = fields[3].toIntOrNull() ?: -1,
+                    packageName = fields[4],
+                    inputType = fields[5].toIntOrNull() ?: 0,
+                    imeOptions = fields[6].toIntOrNull() ?: 0,
+                )
+            } else null
+            mainHandler.post { callback(snapshot) }
+        }
+    }
 
     fun forceStop(packageName: String) = onWorker { service?.forceStop(packageName) }
 

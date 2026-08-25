@@ -35,6 +35,8 @@ Install the following locally:
 - Android Studio with JDK 17.
 - Android SDK Platform 37 and Build Tools suitable for the project.
 - Android NDK `30.0.14904198` and CMake `4.1.2`.
+- Rust stable with the minimal profile. FlorisBoard's build adds the
+  `aarch64-linux-android` target and also requests NDK `26.1.10909125`.
 - Git and ADB.
 - The official [VITURE XR Glasses SDK](https://www.viture.com/en-US/developer),
   downloaded under the SDK terms from VITURE's developer portal.
@@ -56,6 +58,7 @@ SDK without adding the SDK files to Git.
 From the LATERAL_ repository root:
 
 ```powershell
+git submodule update --init --recursive
 .\gradlew.bat :app:assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
@@ -74,13 +77,18 @@ native runtime. Do not redistribute the SDK archive, headers, or native
 libraries unless VITURE's terms expressly permit it.
 
 The LATERAL_ source repository intentionally does not contain the SDK. The
-project's `LICENSE` covers LATERAL_-specific source; `LICENSE-UXSPACE` and
-`NOTICE` cover the retained UxSpace attribution.
+project's `LICENSE` covers LATERAL_-specific source; `LICENSE-UXSPACE`,
+`third_party/florisboard/LICENSE`, and `NOTICE` cover retained third-party
+attribution.
 
 ## Troubleshooting
 
-- **No hosted apps / “Keyboard routing unavailable”**: pair or restart the
-  privileged helper and confirm Wireless debugging is enabled.
+- **Embedded keyboard unavailable**: pair or restart the privileged helper and
+  confirm Wireless debugging is enabled. LATERAL_ restores the previously
+  selected Android keyboard rather than using shell text injection.
+- **No embedded-keyboard haptics**: enable Android's system haptics. LATERAL_
+  uses FlorisBoard's built-in key-press feedback, which follows that preference
+  and vibrates the phone rather than the glasses.
 - **BeastUI appears on the phone**: reconnect the glasses and relaunch
   LATERAL_; the external display must be available before BeastUI can attach.
 - **Black hosted app card**: reconnect or minimize/restore the card to trigger

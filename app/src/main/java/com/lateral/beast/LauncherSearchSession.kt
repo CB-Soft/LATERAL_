@@ -17,6 +17,7 @@ object LauncherSearchSession {
     fun removeListener(listener: () -> Unit) { listeners -= listener }
 
     fun begin() {
+        HostedTextInputSession.close()
         query = ""
         active = true
         notifyChanged()

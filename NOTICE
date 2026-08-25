@@ -4,3 +4,16 @@ Copyright 2026 Dane Barland
 This product includes reference-derived work and attribution for UxSpace.
 UxSpace is licensed under the Apache License, Version 2.0; its license text is
 preserved in LICENSE-UXSPACE.
+
+This product embeds FlorisBoard v0.5.2 and includes a small LATERAL_-maintained
+integration layer. FlorisBoard is Copyright (C) the FlorisBoard contributors and
+is licensed under the Apache License, Version 2.0. Its source, attribution, and
+license are preserved in third_party/florisboard and
+third_party/florisboard/LICENSE.
+
+FlorisBoard source: https://github.com/florisboard/florisboard
+LATERAL_ uses FlorisBoard's keyboard UI, editor/input engine, layouts, assets,
+Snygg styling system, and built-in key-press haptic-feedback implementation via
+an isolated embedded library target. The standalone FlorisBoard application,
+settings, theme editor/import, providers, clipboard history, and launcher
+surfaces are not exposed by LATERAL_.

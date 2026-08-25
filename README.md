@@ -29,7 +29,19 @@ depend on the phone firmware, so re-test the privileged path after system update
 
 Hosting third-party apps on Beast relies on a shell-privileged helper started through Wireless debugging. The helper creates trusted virtual displays, moves individual Android tasks, injects pointer/gesture input, and manages display lifecycle.
 
-For native text editing, LATERAL_ verifies WindowManager's fallback-display IME policy before a hosted app is used. When supported, an editable control in a Beast-hosted app opens Android's normal keyboard on the **phone**, not on the glasses. If that policy cannot be applied and read back, LATERAL_ refuses the hosted session rather than silently falling back to a keyboard-leaking external display.
+For native text editing, LATERAL_ temporarily selects its embedded FlorisBoard
+session IME. The hosted editor keeps its real `InputConnection` and focus while
+the keyboard itself is rendered at the bottom of PhoneUI. Android's IME window is
+never shown on either display. The prior system keyboard is restored with
+compare-and-set semantics when the session ends, including helper/Binder failure
+recovery.
+
+FlorisBoard is passively preloaded with LATERAL_ so a session can start without
+cold-loading the keyboard service or Compose UI. Preloading neither selects
+FlorisBoard nor requests an editor connection; Gboard (or the user's chosen IME)
+remains selected until a verified hosted editor is activated. Embedded keyboard
+key presses use FlorisBoard's built-in haptic-feedback path. It respects Android's
+system haptics setting and vibrates the phone, not the glasses or Beast touchpad.
 
 Behavior therefore depends on the NX789J firmware, Android build, and the connected Beast display. Re-test the privileged path after phone or system updates.
 
@@ -39,6 +51,7 @@ Behavior therefore depends on the NX789J firmware, Android build, and the connec
 - VITURE Beast glasses connected as an external display.
 - Developer options and Wireless debugging enabled for the initial privileged-helper pairing.
 - Android Studio with JDK 17 and an Android SDK/NDK installation suitable for the project.
+- Rust stable (minimal profile) and CMake 4.1.2 for FlorisBoard's arm64 native engine.
 - ADB available when installing development builds.
 
 ## Build and install
@@ -50,6 +63,7 @@ troubleshooting.
 From the repository root:
 
 ```powershell
+git submodule update --init --recursive
 .\gradlew.bat :app:assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
@@ -57,6 +71,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 On macOS/Linux, use:
 
 ```bash
+git submodule update --init --recursive
 ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -98,13 +113,19 @@ Ultrawide mode is detected from the connected display. LATERAL_ corrects for the
 - `app/src/main/java/com/lateral/beast/WorkspaceState.kt` — shared task/workspace state.
 - `app/src/main/java/com/lateral/beast/AndroidTaskSynchronizer.kt` — Android task snapshot reconciliation.
 - `app/src/main/java/com/lateral/privileged/` — shell helper, trusted displays, task operations, and input injection.
+- `third_party/florisboard/` — pinned FlorisBoard v0.5.2 fork and isolated `:embedded` library.
+- `docs/FLORISBOARD_EMBEDDED.md` — embedded-IME architecture and upstream upgrade workflow.
 - `docs/BEAST_UI.md` — BeastUI architecture and invariants.
 - `LATERAL_ Outline.md` — product/design reference.
 - `docs/ROADMAP.md` — planned SDK-free monitor release and future work.
 
 ## Troubleshooting
 
-- **No hosted apps or “Keyboard routing unavailable”**: re-pair/restart the privileged helper. Do not expect Beast app hosting to work without verified IME fallback routing.
+- **Embedded keyboard unavailable**: re-pair/restart the privileged helper. LATERAL_
+  will leave the hosted editor focused and restore the previous keyboard instead of
+  falling back to shell text injection.
+- **No keyboard haptics**: enable Android system haptics. The embedded FlorisBoard
+  key-press feedback respects that global preference.
 - **Black hosted app surface**: reconnect the glasses or restore/minimize the card to trigger surface reattachment. The implementation uses `TextureView` composition because the target device can render nested `SurfaceView` virtual-display queues as black.
 - **External display changed mode**: allow LATERAL_ to reconfigure the workspace; it preserves the workspace model and reattaches hosted surfaces where the firmware allows it.
 - **Unexpected task state**: Android Overview remains authoritative for task existence. LATERAL_ reconciles task snapshots while Beast is connected, while avoiding system, Home, LATERAL_, and known device ghost records.
@@ -112,7 +133,9 @@ Ultrawide mode is detected from the connected display. LATERAL_ corrects for the
 ## License and attribution
 
 LATERAL_-specific code is licensed under [Apache-2.0](LICENSE). See
-[NOTICE](NOTICE) and [`LICENSE-UXSPACE`](LICENSE-UXSPACE) for the retained UxSpace
-attribution and license text. UxSpace is used as a reference for trusted per-app
+[NOTICE](NOTICE), [`LICENSE-UXSPACE`](LICENSE-UXSPACE), and
+[`third_party/florisboard/LICENSE`](third_party/florisboard/LICENSE) for retained
+third-party attribution and license text. UxSpace is used as a reference for trusted per-app
 virtual-display hosting; LATERAL_ deliberately does not reuse its freeform
-drag/drop window-management model.
+drag/drop window-management model. FlorisBoard v0.5.2 supplies the embedded
+session keyboard UI, layouts, editor engine, assets, and Snygg styling system.

@@ -25,3 +25,9 @@ dependencyResolutionManagement {
 
 rootProject.name = "LATERAL_"
 include(":app")
+includeBuild("third_party/florisboard") {
+    dependencySubstitution {
+        substitute(module("com.lateral.thirdparty:florisboard-embedded"))
+            .using(project(":embedded"))
+    }
+}
