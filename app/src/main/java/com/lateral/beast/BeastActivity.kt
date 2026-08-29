@@ -141,6 +141,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var hoverUpdateQueued = false
     private var routedPointerCard: BeastTaskCard? = null
     private var routedPointerButton = 0
+    private var routedFullscreenExitPointer = false
     private val hoverUpdateFrame = Runnable {
         hoverUpdateQueued = false
         updateBeastHoverAtCursor()
@@ -440,6 +441,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppClick(displayId: Int, x: Int, y: Int, button: Int): Boolean {
         if (display?.displayId != displayId) return false
+        // Fullscreen puts the hosted TextureView over the entire Beast window. Intercept
+        // clicks on the shell-owned exit affordance before the app-routing fast path.
+        if (button == MotionEvent.BUTTON_PRIMARY && isFullscreenExitHit(x, y)) {
+            fullscreenExitForFocusedTask()?.performClick()
+            return true
+        }
         return cards.values.toList().asReversed().any { it.routeClickAt(x, y, button) }
     }
 
@@ -456,11 +463,24 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             routedPointerCard?.cancelRoutedPointer()
             routedPointerCard = null
             routedPointerButton = 0
+            routedFullscreenExitPointer = button == MotionEvent.BUTTON_PRIMARY &&
+                isFullscreenExitHit(x, y)
+            if (routedFullscreenExitPointer) return true
             val target = cards.values.toList().asReversed().firstOrNull {
                 it.routePointerAt(x, y, action, button, buttonState)
             } ?: return false
             routedPointerCard = target
             routedPointerButton = button
+            return true
+        }
+
+        if (routedFullscreenExitPointer) {
+            if (action == MotionEvent.ACTION_UP) {
+                routedFullscreenExitPointer = false
+                if (button == MotionEvent.BUTTON_PRIMARY) fullscreenExitForFocusedTask()?.performClick()
+            } else if (action == MotionEvent.ACTION_CANCEL) {
+                routedFullscreenExitPointer = false
+            }
             return true
         }
 
@@ -473,6 +493,21 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             routedPointerButton = 0
         }
         return true
+    }
+
+    private fun fullscreenExitForFocusedTask(): TextView? {
+        val focusedId = WorkspaceState.focusedTaskId ?: return null
+        val task = WorkspaceState.tasks.firstOrNull {
+            it.id == focusedId && it.mode == PresentationMode.FULLSCREEN
+        } ?: return null
+        return cards[task.id]?.fullscreenExitControl()
+    }
+
+    private fun isFullscreenExitHit(x: Int, y: Int): Boolean {
+        val exit = fullscreenExitForFocusedTask() ?: return false
+        if (exit.visibility != View.VISIBLE || !exit.isEnabled) return false
+        val bounds = Rect()
+        return exit.getGlobalVisibleRect(bounds) && bounds.contains(x, y)
     }
 
     private fun buildUi() {
@@ -510,7 +545,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         shell.addView(workspaceScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         taskbar = FrameLayout(this).apply {
-            setPadding(uiDp(12), 0, uiDp(8), 0)
+            // Keep overflow controls flush with the external-display edges. The navigation
+            // row already reserves their width when visible, so an outer inset would make the
+            // arrows miss the cursor when it is parked at the far left or right edge.
+            setPadding(0, 0, 0, 0)
             setBackgroundColor(Color.rgb(14, 16, 17))
         }
         taskbarScroll = HorizontalScrollView(this).apply {
@@ -788,9 +826,16 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         onMove = { delta -> WorkspaceState.move(task.id, delta) }
         onMode = { WorkspaceState.setMode(task.id, task.mode.nextFramed()) }
         onFullscreen = {
+            val currentMode = WorkspaceState.tasks.firstOrNull { it.id == task.id }?.mode ?: task.mode
+            val nextMode = if (currentMode == PresentationMode.FULLSCREEN) {
+                PresentationMode.TABLET
+            } else {
+                PresentationMode.FULLSCREEN
+            }
+            Log.d(TAG, "fullscreen_toggle task=${task.id} $currentMode->$nextMode")
             WorkspaceState.setMode(
                 task.id,
-                if (task.mode == PresentationMode.FULLSCREEN) PresentationMode.TABLET else PresentationMode.FULLSCREEN,
+                nextMode,
             )
         }
         onMinimize = { WorkspaceState.minimize(task.id) }
@@ -1744,6 +1789,7 @@ private class BeastTaskCard(
     fun retainForReattach() = surface.retainForReattach()
     fun sendKey(keyCode: Int) = surface.sendKey(keyCode)
     fun captureBitmap() = surface.captureBitmap()
+    fun fullscreenExitControl(): TextView = fullscreenExit
     fun restoreFocus() = surface.requestFocus()
     fun retryImeRouting() = surface.retryImeRouting()
     fun routeScrollAt(globalX: Int, globalY: Int, amount: Float) =

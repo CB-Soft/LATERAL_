@@ -679,6 +679,17 @@ object PrivilegedService {
             .getOrDefault(false)
     }
 
+    /**
+     * Repairs the phone display only when a task transition exposed Home. A different
+     * top task is treated as an intentional user task switch and is never overridden.
+     */
+    fun restorePhoneTaskIfStillHome(taskId: Int): Boolean {
+        val helper = service ?: return false
+        return runCatching { helper.restorePhoneTaskIfStillHome(taskId) }
+            .onFailure { Log.e(TAG, "restorePhoneTaskIfStillHome failed", it) }
+            .getOrDefault(false)
+    }
+
     fun focusPhoneTaskAsync(taskId: Int, callback: (Boolean) -> Unit) {
         worker.execute {
             val focused = startRecentTaskOnDisplay(taskId, android.view.Display.DEFAULT_DISPLAY)

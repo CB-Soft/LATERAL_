@@ -67,7 +67,17 @@ object BeastWorkspaceController {
             if (BeastActivity.workspaceDisplayId() != display.displayId &&
                 PrivilegedService.state == PrivilegedService.State.READY
             ) {
-                PrivilegedService.startRecentTaskOnDisplay(info.taskId, display.displayId)
+                val phoneTaskId = MainActivity.currentPhoneTaskId()
+                if (phoneTaskId >= 0) {
+                    val result = PrivilegedService.restoreTaskPreservingPhoneFocus(
+                        info.taskId, display.displayId, phoneTaskId,
+                    )
+                    if (!result.targetRestored) {
+                        Log.w(TAG, "could not relocate Beast task with focus policy: ${result.name}")
+                    }
+                } else {
+                    PrivilegedService.startRecentTaskOnDisplay(info.taskId, display.displayId)
+                }
             }
         }
 

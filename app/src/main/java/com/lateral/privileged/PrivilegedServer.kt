@@ -1,5 +1,6 @@
 package com.lateral.privileged
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.app.ActivityOptions
 import android.content.ComponentName
@@ -1141,6 +1142,28 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         }.getOrDefault(false)
     }
 
+    override fun restorePhoneTaskIfStillHome(phoneTaskId: Int): Boolean {
+        val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
+        if (topTaskId == phoneTaskId) {
+            Log.d(TAG, "phone focus repair skipped; PhoneUI already owns display 0")
+            return true
+        }
+
+        val top = observedTasks().firstOrNull { it.taskId == topTaskId }
+        if (top?.activityType != ACTIVITY_TYPE_HOME) {
+            Log.d(
+                TAG,
+                "phone focus repair skipped; display 0 top=$topTaskId " +
+                    "type=${top?.activityType ?: "unknown"}",
+            )
+            return false
+        }
+
+        val restored = bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY)
+        Log.i(TAG, "phone focus repair top=Home phone=$phoneTaskId restored=$restored")
+        return restored
+    }
+
     override fun removeTask(taskId: Int): Boolean = runCatching {
         val service = activityTaskManagerService()
         val method = service.javaClass.methods.firstOrNull {
@@ -1153,6 +1176,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         run("am", "stack", "remove", taskId.toString())
     }
 
+    @SuppressLint("BlockedPrivateApi")
     private fun activityTaskManagerService(): Any {
         val type = Class.forName("android.app.ActivityTaskManager")
         val method = type.getDeclaredMethod("getService").apply { isAccessible = true }
@@ -1568,7 +1592,13 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         // Never take display 0 back from an app the user deliberately selected. The
         // preservation transaction is conditional on PhoneUI owning that display when
         // the operation begins; background recovery may still restore the Beast task.
-        val preservePhoneFocus = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId
+        val phoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
+        val preservePhoneFocus = phoneTopTaskId == phoneTaskId
+        Log.i(
+            TAG,
+            "focus transaction target=$taskId->$beastDisplayId phone=$phoneTaskId " +
+                "phoneTop=$phoneTopTaskId preserve=$preservePhoneFocus",
+        )
         val guarded = preservePhoneFocus && acquirePhoneTouchGuard()
         try {
             if (!startRecentTaskOnDisplay(taskId, beastDisplayId)) {
@@ -1585,6 +1615,30 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
             // startActivityFromRecents is the only operation which reliably promotes an
             // already-correct-display task on this ROM. Fall back to the shell move path.
+            val currentPhoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
+            if (currentPhoneTopTaskId == null) {
+                Log.w(TAG, "focus transaction skipped phone recovery; display 0 top is unknown")
+                return if (verifyTargetPlacement(taskId, beastDisplayId)) {
+                    RESTORE_SUCCESS
+                } else {
+                    RESTORE_VERIFICATION_FAILED
+                }
+            }
+            if (currentPhoneTopTaskId != phoneTaskId) {
+                val currentPhoneTop = observedTasks().firstOrNull { it.taskId == currentPhoneTopTaskId }
+                if (currentPhoneTop?.activityType != ACTIVITY_TYPE_HOME) {
+                    Log.i(
+                        TAG,
+                        "focus transaction canceled phone recovery; display 0 top=" +
+                            "$currentPhoneTopTaskId type=${currentPhoneTop?.activityType ?: "unknown"}",
+                    )
+                    return if (verifyTargetPlacement(taskId, beastDisplayId)) {
+                        RESTORE_SUCCESS
+                    } else {
+                        RESTORE_VERIFICATION_FAILED
+                    }
+                }
+            }
             val phoneRecovered = bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY) ||
                 startRecentTaskOnDisplay(phoneTaskId, Display.DEFAULT_DISPLAY)
             if (!phoneRecovered) return RESTORE_PHONE_FOCUS_FAILED

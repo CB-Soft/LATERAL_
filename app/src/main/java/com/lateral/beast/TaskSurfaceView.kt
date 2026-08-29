@@ -153,9 +153,20 @@ class TaskSurfaceView @JvmOverloads constructor(
                 id, width.coerceAtLeast(1), height.coerceAtLeast(1), targetDensityDpi,
             )
             task?.androidTaskId?.let { taskId ->
-                // Frame production recovery is background maintenance. It must never
-                // re-front PhoneUI or install a phone touch guard.
-                PrivilegedService.restoreRecentTaskOnDisplay(taskId, id) { }
+                val phoneTaskId = MainActivity.currentPhoneTaskId()
+                if (phoneTaskId >= 0) {
+                    // Reattaching a background task can still perturb global focus on the
+                    // target ROM, so use the same conditional transaction as activation.
+                    PrivilegedService.restoreTaskPreservingPhoneFocusAsync(
+                        taskId, id, phoneTaskId,
+                    ) { result ->
+                        if (!released && result != PrivilegedService.FocusRestoreResult.SUCCESS) {
+                            onRestoreFailed?.invoke(result)
+                        }
+                    }
+                } else {
+                    PrivilegedService.restoreRecentTaskOnDisplay(taskId, id) { }
+                }
             }
             scheduleFrameWatchdog(generation)
             return
@@ -394,8 +405,7 @@ class TaskSurfaceView @JvmOverloads constructor(
             val exactTaskId = item.androidTaskId
             val resumed = exactTaskId?.let { taskId ->
                 val phoneTaskId = MainActivity.currentPhoneTaskId()
-                val explicitMove = android.os.SystemClock.uptimeMillis() < item.beastRequestUntil
-                if (phoneTaskId >= 0 && explicitMove) {
+                if (phoneTaskId >= 0) {
                     val result = PrivilegedService.restoreTaskPreservingPhoneFocus(
                         taskId, id, phoneTaskId,
                     )
@@ -669,10 +679,25 @@ class TaskSurfaceView @JvmOverloads constructor(
 
             val recentTaskId = item.androidTaskId
             if (recentTaskId != null) {
-                // Back recovery repairs only the hosted display. It is not a request to
-                // take focus from whichever app the user selected on the phone.
-                PrivilegedService.restoreRecentTaskOnDisplay(recentTaskId, id) {
-                    mainHandler.postDelayed({ callback(true) }, RECOVERY_SETTLE_MS)
+                val phoneTaskId = MainActivity.currentPhoneTaskId()
+                if (phoneTaskId >= 0) {
+                    PrivilegedService.restoreTaskPreservingPhoneFocusAsync(
+                        recentTaskId, id, phoneTaskId,
+                    ) {
+                        if (!released) {
+                            mainHandler.postDelayed({
+                                if (!released) callback(true)
+                            }, RECOVERY_SETTLE_MS)
+                        }
+                    }
+                } else {
+                    PrivilegedService.restoreRecentTaskOnDisplay(recentTaskId, id) {
+                        if (!released) {
+                            mainHandler.postDelayed({
+                                if (!released) callback(true)
+                            }, RECOVERY_SETTLE_MS)
+                        }
+                    }
                 }
             } else {
                 PrivilegedService.launchApp(id, item.packageName, item.activityName)

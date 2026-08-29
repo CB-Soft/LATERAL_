@@ -182,4 +182,7 @@ interface IPrivilegedService {
 
     /** Set a physical display's user-preferred width, height, and refresh rate. */
     boolean setUserPreferredDisplayMode(int displayId, int width, int height, float refreshRate) = 39;
+
+    /** Restore PhoneUI only when display 0 is still exposing Home after a task transition. */
+    boolean restorePhoneTaskIfStillHome(int phoneTaskId) = 46;
 }
