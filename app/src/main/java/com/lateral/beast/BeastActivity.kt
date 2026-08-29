@@ -63,6 +63,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         private const val TOOLBAR_TEXT_SIZE = 11f
         private const val TASKBAR_LABEL_CHARACTERS = 12
         private const val TASKBAR_HEIGHT_DP = 44
+        private const val TASKBAR_STEP_CONTROL_WIDTH_DP = 28
+        private const val TASKBAR_SCROLL_STEP_FRACTION = .68f
         private const val SYSTEM_STATUS_INTERVAL_MS = 1_000L
         private const val APP_DECORATOR_HEIGHT_DP = 32
         private const val APP_DECORATOR_MIN_WIDTH_DP = 300
@@ -99,8 +101,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private lateinit var taskStrip: LinearLayout
     private lateinit var toolbar: FrameLayout
     private lateinit var taskbar: FrameLayout
+    private lateinit var taskbarScroll: HorizontalScrollView
     private lateinit var taskbarContent: LinearLayout
     private lateinit var taskTabs: LinearLayout
+    private lateinit var taskbarPrevious: TextView
+    private lateinit var taskbarNext: TextView
     private lateinit var taskbarShell: LinearLayout
     private lateinit var viewportMap: ViewportMapView
     private lateinit var fullscreenLayer: FrameLayout
@@ -507,6 +512,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             setPadding(uiDp(12), 0, uiDp(8), 0)
             setBackgroundColor(Color.rgb(14, 16, 17))
         }
+        taskbarScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            // Keep the tab row wrap-content so its configured alignment remains meaningful
+            // when it does not overflow.
+            isFillViewport = false
+        }
         taskbarContent = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -518,8 +530,38 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         taskbarContent.addView(taskTabs, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
         ))
-        taskbar.addView(taskbarContent, FrameLayout.LayoutParams(
+        taskbarScroll.addView(taskbarContent, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        fun taskbarStepButton(symbol: String, description: String, direction: Int) =
+            label(symbol, 20f, ACCENT, bold = true).apply {
+                gravity = Gravity.CENTER
+                contentDescription = description
+                visibility = View.GONE
+                setBeastClick { scrollTaskbarBy(direction) }
+            }
+        taskbarPrevious = taskbarStepButton("‹", "Show earlier task tabs", -1)
+        taskbarNext = taskbarStepButton("›", "Show later task tabs", 1)
+        val taskbarNavigation = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(taskbarPrevious, LinearLayout.LayoutParams(
+                uiDp(TASKBAR_STEP_CONTROL_WIDTH_DP),
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ))
+            addView(taskbarScroll, LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1f,
+            ))
+            addView(taskbarNext, LinearLayout.LayoutParams(
+                uiDp(TASKBAR_STEP_CONTROL_WIDTH_DP),
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ))
+        }
+        taskbar.addView(taskbarNavigation, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
         ))
         taskbarShell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -554,6 +596,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             syncViewportMap()
             val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(1)
             WorkspaceState.setViewportPosition(scrollX.toFloat() / maxScroll)
+        }
+        taskbarScroll.setOnScrollChangeListener { _, _, _, _, _ ->
+            updateTaskbarOverflowControls()
+        }
+        taskbarScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updateTaskbarOverflowControls()
         }
     }
 
@@ -849,7 +897,34 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 })
             }
         }
+        taskbarScroll.post(::updateTaskbarOverflowControls)
         renderToolbar()
+    }
+
+    /** Shows edge controls only when tabs continue beyond the visible taskbar viewport. */
+    private fun updateTaskbarOverflowControls() {
+        if (!::taskbarScroll.isInitialized || taskbarScroll.width <= 0) return
+        val maxScroll = (taskbarContent.width - taskbarScroll.width).coerceAtLeast(0)
+        val canShowEarlier = maxScroll > 0 && taskbarScroll.scrollX > 0
+        val canShowLater = maxScroll > 0 && taskbarScroll.scrollX < maxScroll
+        val previousVisibility = if (canShowEarlier) View.VISIBLE else View.GONE
+        val nextVisibility = if (canShowLater) View.VISIBLE else View.GONE
+        if (taskbarPrevious.visibility != previousVisibility) {
+            taskbarPrevious.visibility = previousVisibility
+        }
+        if (taskbarNext.visibility != nextVisibility) {
+            taskbarNext.visibility = nextVisibility
+        }
+    }
+
+    private fun scrollTaskbarBy(direction: Int) {
+        if (direction == 0 || taskbarScroll.width <= 0) return
+        val maxScroll = (taskbarContent.width - taskbarScroll.width).coerceAtLeast(0)
+        val step = (taskbarScroll.width * TASKBAR_SCROLL_STEP_FRACTION).roundToInt().coerceAtLeast(1)
+        taskbarScroll.smoothScrollTo(
+            (taskbarScroll.scrollX + direction * step).coerceIn(0, maxScroll),
+            0,
+        )
     }
 
     /** Top bar contains workspace navigation and settings; the app strip stays below. */
@@ -1280,7 +1355,14 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun focusTask(task: BeastTask) {
-        if (WorkspaceState.focusedTaskId != task.id) launcherPreferences.recordUse(task.packageName)
+        // Input delivered inside the already-focused hosted task (pinch, scroll, Chrome
+        // menu controls, and contextual actions) must not re-run a cross-display task
+        // focus transaction. That transaction can briefly front the task on Android and
+        // steal PhoneUI focus even though the user never changed apps.
+        if (WorkspaceState.focusedTaskId == task.id && task.placement == TaskPlacement.BEAST_VISIBLE) {
+            return
+        }
+        launcherPreferences.recordUse(task.packageName)
         WorkspaceState.focus(task.id, reveal = true)
     }
 

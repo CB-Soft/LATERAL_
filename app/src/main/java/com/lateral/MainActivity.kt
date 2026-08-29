@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private lateinit var trackpad: TrackpadView
     private lateinit var workspaceNavigator: WorkspaceNavigatorView
     private lateinit var workspaceViewportSlider: WorkspaceViewportSliderView
+    private lateinit var phoneTaskbarContainer: LinearLayout
     private val accentCommandViews = mutableListOf<TextView>()
     private lateinit var beastDisplayModeController: BeastDisplayModeController
     private var externalDisplay: Display? = null
@@ -121,6 +122,13 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             }
             if (::workspaceNavigator.isInitialized) workspaceNavigator.invalidate()
             if (::workspaceViewportSlider.isInitialized) workspaceViewportSlider.invalidate()
+            if (::phoneTaskbarContainer.isInitialized) {
+                phoneTaskbarContainer.visibility = if (InputSettings.showPhoneTaskbar) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
+            }
         }
     }
     private val privilegedStateListener: () -> Unit = {
@@ -464,6 +472,14 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             onViewportChanged = WorkspaceState::setViewportPosition
             setViewportPosition(WorkspaceState.viewportPosition)
         }
+        phoneTaskbarContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (InputSettings.showPhoneTaskbar) View.VISIBLE else View.GONE
+            addView(
+                workspaceNavigator,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)),
+            )
+        }
 
         inputDebugText = TextView(this).apply {
             text = privilegedStatusText()
@@ -558,6 +574,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         // Per-app actions stay within easy reach at the top of PhoneUI.
         root.addView(controls)
         root.addView(rule())
+        // The optional task tabs live directly above the touchpad.
+        root.addView(phoneTaskbarContainer)
 
         root.addView(
             trackpad,
@@ -568,17 +586,14 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             )
         )
 
-        // The viewport slider belongs to the touch surface: it sits on its lower
-        // border, immediately before the status/taskbar area.
+        // The viewport scrollbar remains available even when task tabs are hidden,
+        // anchored at the bottom edge of the touchpad for quick horizontal navigation.
         root.addView(workspaceViewportSlider, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             dp(30),
         ))
         root.addView(inputDebugText)
         root.addView(currentAppText)
-        // The Beast/workspace view is kept at the bottom, separate from input controls.
-        root.addView(rule())
-        root.addView(workspaceNavigator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
         root.addView(
             embeddedKeyboardContainer,
             LinearLayout.LayoutParams(

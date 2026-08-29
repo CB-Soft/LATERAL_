@@ -23,6 +23,7 @@ object InputSettings {
     private const val KEY_STANDARD_FONT_SCALE = "standard_font_scale"
     private const val KEY_ULTRAWIDE_FONT_SCALE = "ultrawide_font_scale"
     private const val KEY_START_MINIMIZED = "start_open_apps_minimized"
+    private const val KEY_SHOW_PHONE_TASKBAR = "show_phone_taskbar"
     private const val KEY_CENTER_BOTTOM_CONTROLS = "center_bottom_controls"
     private const val KEY_TOOLBAR_ALIGNMENT = "toolbar_alignment"
     private const val KEY_TASKBAR_ALIGNMENT = "taskbar_alignment"
@@ -56,6 +57,9 @@ object InputSettings {
     @Volatile var ultrawideFontScale = 1.50f
         private set
     @Volatile var startOpenAppsMinimized = true
+        private set
+    /** PhoneUI defaults to a clean touchpad-only controller; the taskbar is opt-in. */
+    @Volatile var showPhoneTaskbar = false
         private set
     @Volatile var toolbarAlignment = BarAlignment.RIGHT
         private set
@@ -100,6 +104,7 @@ object InputSettings {
         standardFontScale = standardUiScale
         ultrawideFontScale = ultrawideUiScale
         startOpenAppsMinimized = prefs.getBoolean(KEY_START_MINIMIZED, true)
+        showPhoneTaskbar = prefs.getBoolean(KEY_SHOW_PHONE_TASKBAR, false)
         val legacyBottomControlsCentered = prefs.getBoolean(KEY_CENTER_BOTTOM_CONTROLS, true)
         // Preserve the old two-position preference as the migration default.
         toolbarAlignment = prefs.getString(KEY_TOOLBAR_ALIGNMENT, null)
@@ -213,6 +218,13 @@ object InputSettings {
         startOpenAppsMinimized = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_START_MINIMIZED, value).apply()
+    }
+
+    fun setShowPhoneTaskbar(context: Context, value: Boolean) {
+        showPhoneTaskbar = value
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_SHOW_PHONE_TASKBAR, value).apply()
+        appearanceListeners.forEach { it() }
     }
 
     fun setToolbarAlignment(context: Context, value: BarAlignment) {

@@ -36,12 +36,12 @@ never shown on either display. The prior system keyboard is restored with
 compare-and-set semantics when the session ends, including helper/Binder failure
 recovery.
 
-FlorisBoard is passively preloaded with LATERAL_ so a session can start without
-cold-loading the keyboard service or Compose UI. Preloading neither selects
-FlorisBoard nor requests an editor connection; Gboard (or the user's chosen IME)
-remains selected until a verified hosted editor is activated. Embedded keyboard
-key presses use FlorisBoard's built-in haptic-feedback path. It respects Android's
-system haptics setting and vibrates the phone, not the glasses or Beast touchpad.
+LATERAL_ prepares the hidden PhoneUI keyboard view without pre-binding Android's
+IME service. Android initializes FlorisBoard exactly once when a verified hosted
+editor activates it; Gboard (or the user's chosen IME) remains selected until
+then. Embedded keyboard key presses use FlorisBoard's built-in haptic-feedback
+path. It respects Android's system haptics setting and vibrates the phone, not the
+glasses or Beast touchpad.
 
 Behavior therefore depends on the NX789J firmware, Android build, and the connected Beast display. Re-test the privileged path after phone or system updates.
 

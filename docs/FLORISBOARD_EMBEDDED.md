@@ -18,11 +18,11 @@ The fork's integration surface is intentionally small:
 
 ## Session runtime behavior
 
-LATERAL_ passively binds the app-owned Floris IME service during application
-startup and precomposes the hidden PhoneUI keyboard view. This only warms
-classes, resources, engine state, and the Compose tree: it does **not** select
-FlorisBoard as the system IME, request an `InputConnection`, show an IME window,
-or transfer focus from a hosted app. The normal session controller still selects
+LATERAL_ precomposes the hidden PhoneUI keyboard view during application startup.
+The real `InputMethodService` is deliberately **not** pre-bound: Android owns its
+single initialization and binds it only when a verified hosted editor selects the
+session IME. This avoids duplicate `IInputMethodPrivilegedOperations`
+initialization on the NX789J. The normal session controller still selects
 FlorisBoard only after an exact Beast editor is identified and restores the prior
 IME when that session ends.
 

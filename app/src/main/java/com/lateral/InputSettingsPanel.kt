@@ -149,6 +149,13 @@ object InputSettingsPanel {
                 InputSettings.setStartOpenAppsMinimized(context, checked)
             }
         }
+        val showPhoneTaskbar = Switch(context).apply {
+            text = "Show PhoneUI taskbar"
+            isChecked = InputSettings.showPhoneTaskbar
+            setOnCheckedChangeListener { _, checked ->
+                InputSettings.setShowPhoneTaskbar(context, checked)
+            }
+        }
         fun alignmentControl(title: String, current: () -> BarAlignment, set: (BarAlignment) -> Unit) =
             TextView(context).apply {
                 typeface = Typeface.MONOSPACE
@@ -265,6 +272,7 @@ object InputSettingsPanel {
         panel.addView(invertScrollbarScroll)
         panel.addView(momentum)
         panel.addView(startMinimized)
+        panel.addView(showPhoneTaskbar)
         panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
         panel.addView(appearanceSlider("UI + text scale · Standard", ultrawide = false))
