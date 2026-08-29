@@ -209,6 +209,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
     private val cursorListener: () -> Unit = {
+        keepCursorOnTop()
         cursorOverlay.postInvalidateOnAnimation()
         if (::root.isInitialized && !hoverUpdateQueued) {
             hoverUpdateQueued = true
@@ -588,6 +589,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             WorkspaceCursor.publishViewport(display?.displayId ?: -1, root.width, root.height)
             updateHorizontalAspectCorrection()
             cards.values.forEach { it.renderedVerticalScale = renderedVerticalScale() }
+            keepCursorOnTop()
         }
 
         workspaceScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateTaskSizes() }
@@ -1055,6 +1057,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             // the only visible pointer on the glasses.
             onModalVisibilityChanged = { cursorOverlay.visibility = View.VISIBLE },
         )
+    }
+
+    /** Keep the rendered pointer above every dynamically rebuilt BeastUI layer. */
+    private fun keepCursorOnTop() {
+        if (::cursorOverlay.isInitialized && cursorOverlay.parent === aspectLayer) {
+            cursorOverlay.bringToFront()
+        }
     }
 
     private fun scrollWorkspace(wheel: Float) {

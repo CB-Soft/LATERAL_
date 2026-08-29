@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         fun restorePhoneUiAfterExternalTaskBatch() {
             val taskId = livePhoneTaskId
             if (taskId >= 0 && PrivilegedService.state == PrivilegedService.State.READY) {
-                PrivilegedService.startRecentTaskOnDisplay(taskId, Display.DEFAULT_DISPLAY)
+                PrivilegedService.restorePhoneTaskIfStillHome(taskId)
             }
         }
     }
@@ -83,6 +83,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private var clearedExternalDisplayId: Int? = null
     private var lastWorkspaceLaunchAt = 0L
     private var phoneDisplayRepairAttempts = 0
+    private var activityResumed = false
+    private var phoneFocusRepairGeneration = 0L
+    private var pendingPhoneFocusRepair: Runnable? = null
     private var nextPhoneFocusLeaseToken = 1L
     private val phoneFocusLeaseTokens = linkedSetOf<Long>()
     private var beastSearchFocusLease: PhoneWindowFocusLease? = null
@@ -100,7 +103,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
     private val workspaceGuard = object : Runnable {
         override fun run() {
-            if (isFinishing || isDestroyed) return
+            if (!activityResumed || isFinishing || isDestroyed) return
             updateExternalDisplay()
             if (externalDisplay != null && !BeastActivity.isWorkspaceVisible() &&
                 SystemClock.uptimeMillis() - lastWorkspaceLaunchAt >= WORKSPACE_RELAUNCH_GUARD_MS
@@ -110,6 +113,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             window.decorView.postDelayed(this, WORKSPACE_GUARD_INTERVAL_MS)
         }
     }
+    private val phoneDisplayRepair = Runnable { keepPhoneUiOnDefaultDisplay() }
+    private val beastSearchFocus = Runnable { focusBeastSearchField() }
     private val sensitivityListener: (Float) -> Unit = { value -> inputController.sensitivity = value }
     private val appearanceListener: () -> Unit = {
         runOnUiThread {
@@ -274,6 +279,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         LauncherSearchSession.removeListener(beastSearchListener)
         HostedTextInputSession.removeListener(hostedTextInputListener)
         if (::connectionText.isInitialized) window.decorView.removeCallbacks(workspaceGuard)
+        if (::connectionText.isInitialized) {
+            window.decorView.removeCallbacks(phoneDisplayRepair)
+            window.decorView.removeCallbacks(beastSearchFocus)
+        }
+        cancelPhoneFocusRepair()
         PrivilegedService.removeListener(privilegedStateListener)
         InputSettings.removeSensitivityListener(sensitivityListener)
         InputSettings.removeAppearanceListener(appearanceListener)
@@ -286,6 +296,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
+        window.decorView.removeCallbacks(phoneDisplayRepair)
         livePhoneTaskId = taskId
         applyPhoneWindowFocusMode()
         if (::beastSearchField.isInitialized) syncBeastSearchField()
@@ -293,11 +305,19 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         displayManager.registerDisplayListener(this, null)
         updateExternalDisplay()
         window.decorView.post(::syncPhoneHostedAppConfiguration)
-        window.decorView.post(::keepPhoneUiOnDefaultDisplay)
+        window.decorView.post(phoneDisplayRepair)
+        window.decorView.post(workspaceGuard)
         AndroidTaskSynchronizer.requestImmediate()
     }
 
     override fun onPause() {
+        activityResumed = false
+        if (::connectionText.isInitialized) {
+            window.decorView.removeCallbacks(workspaceGuard)
+            window.decorView.removeCallbacks(phoneDisplayRepair)
+            window.decorView.removeCallbacks(beastSearchFocus)
+        }
+        cancelPhoneFocusRepair()
         if (::trackpad.isInitialized) trackpad.cancelActiveGesture()
         if (::inputController.isInitialized) inputController.cancelActiveButtons()
         resetPhoneWindowFocusLeases()
@@ -840,26 +860,27 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun showBeastLauncherSearchOnPhone() {
         // Give the shell move one traversal before focusing PhoneUI's in-layout field.
         keepPhoneUiOnDefaultDisplay()
-        window.decorView.postDelayed(::focusBeastSearchField, PHONE_DISPLAY_SETTLE_MS)
+        window.decorView.removeCallbacks(beastSearchFocus)
+        window.decorView.postDelayed(beastSearchFocus, PHONE_DISPLAY_SETTLE_MS)
     }
 
     /** MainActivity is phone-only even when a cross-display singleTask launch races OEM policy. */
     private fun keepPhoneUiOnDefaultDisplay() {
-        if (isFinishing || isDestroyed) return
+        if (!activityResumed || isFinishing || isDestroyed) return
         if (display?.displayId == Display.DEFAULT_DISPLAY) {
             phoneDisplayRepairAttempts = 0
             return
         }
         if (PrivilegedService.state == PrivilegedService.State.READY) {
-            PrivilegedService.startRecentTaskOnDisplay(taskId, Display.DEFAULT_DISPLAY)
+            PrivilegedService.restorePhoneTaskIfStillHome(taskId)
         }
         if (phoneDisplayRepairAttempts++ < MAX_PHONE_DISPLAY_REPAIR_ATTEMPTS) {
-            window.decorView.postDelayed(::keepPhoneUiOnDefaultDisplay, PHONE_DISPLAY_REPAIR_DELAY_MS)
+            window.decorView.postDelayed(phoneDisplayRepair, PHONE_DISPLAY_REPAIR_DELAY_MS)
         }
     }
 
     private fun focusBeastSearchField() {
-        if (isFinishing || isDestroyed || !LauncherSearchSession.active) return
+        if (!activityResumed || isFinishing || isDestroyed || !LauncherSearchSession.active) return
         syncBeastSearchField()
         beastSearchField.requestFocus()
         beastSearchField.post {
@@ -912,16 +933,30 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             // transiently promote that task globally and expose Home on display 0.
             // A user-originated PhoneUI action must leave the same PhoneUI task in
             // front; watchdog recovery deliberately does not steal the phone back.
-            if (preservePhoneUi) window.decorView.postDelayed({
-                if (!isFinishing && !isDestroyed &&
-                    PrivilegedService.state == PrivilegedService.State.READY
-                ) {
-                    PrivilegedService.startRecentTaskOnDisplay(taskId, Display.DEFAULT_DISPLAY)
-                }
-            }, 180L)
+            if (preservePhoneUi) schedulePhoneFocusRepair(180L)
         } else {
             Toast.makeText(this, "Could not open Beast workspace", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun schedulePhoneFocusRepair(delayMs: Long) {
+        cancelPhoneFocusRepair()
+        val generation = phoneFocusRepairGeneration
+        val repair = Runnable {
+            if (generation != phoneFocusRepairGeneration || !activityResumed ||
+                isFinishing || isDestroyed || PrivilegedService.state != PrivilegedService.State.READY
+            ) return@Runnable
+            PrivilegedService.restorePhoneTaskIfStillHome(taskId)
+            pendingPhoneFocusRepair = null
+        }
+        pendingPhoneFocusRepair = repair
+        window.decorView.postDelayed(repair, delayMs)
+    }
+
+    private fun cancelPhoneFocusRepair() {
+        phoneFocusRepairGeneration++
+        pendingPhoneFocusRepair?.let(window.decorView::removeCallbacks)
+        pendingPhoneFocusRepair = null
     }
 
     /**
