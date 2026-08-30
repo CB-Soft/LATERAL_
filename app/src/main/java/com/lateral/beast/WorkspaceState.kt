@@ -24,6 +24,8 @@ data class BeastTask(
     var androidTaskId: Int? = null,
     var instanceTitle: String = "",
     var mode: PresentationMode = PresentationMode.PHONE,
+    /** The framed mode to restore after leaving fullscreen. */
+    var fullscreenReturnMode: PresentationMode? = null,
     var placement: TaskPlacement = TaskPlacement.PHONE,
     var lastInteractionSequence: Long = 0L,
     var androidDisplayId: Int = 0,
@@ -168,6 +170,7 @@ object WorkspaceState {
                         androidTaskId = snapshot.taskId,
                         instanceTitle = snapshot.title,
                         mode = saved?.mode ?: PresentationMode.PHONE,
+                        fullscreenReturnMode = saved?.fullscreenReturnMode,
                         placement = placement,
                         lastInteractionSequence = nextInteractionSequence(),
                     )
@@ -291,7 +294,20 @@ object WorkspaceState {
 
     fun setMode(id: Long, mode: PresentationMode) {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
-        task.mode = mode
+        val nextMode = when {
+            mode == PresentationMode.FULLSCREEN && task.mode != PresentationMode.FULLSCREEN -> {
+                if (task.mode == PresentationMode.PHONE || task.mode == PresentationMode.TABLET) {
+                    task.fullscreenReturnMode = task.mode
+                }
+                mode
+            }
+            task.mode == PresentationMode.FULLSCREEN && mode != PresentationMode.FULLSCREEN -> {
+                task.fullscreenReturnMode ?: mode
+            }
+            else -> mode
+        }
+        if (nextMode != PresentationMode.FULLSCREEN) task.fullscreenReturnMode = null
+        task.mode = nextMode
         task.placement = TaskPlacement.BEAST_VISIBLE
         task.lastInteractionSequence = nextInteractionSequence()
         focusedTaskId = id
@@ -384,6 +400,7 @@ object WorkspaceState {
         val packageName: String,
         val placement: TaskPlacement,
         val mode: PresentationMode,
+        val fullscreenReturnMode: PresentationMode?,
         val beastOrder: Int,
     )
 
@@ -396,6 +413,9 @@ object WorkspaceState {
                     item.getString("package"),
                     TaskPlacement.valueOf(item.getString("placement")),
                     PresentationMode.valueOf(item.getString("mode")),
+                    item.optString("fullscreenReturnMode", "")
+                        .takeIf(String::isNotBlank)
+                        ?.let(PresentationMode::valueOf),
                     item.optInt("beastOrder", index),
                 ))
             }
@@ -411,6 +431,7 @@ object WorkspaceState {
                 put("package", task.packageName)
                 put("placement", task.placement.name)
                 put("mode", task.mode.name)
+                task.fullscreenReturnMode?.let { put("fullscreenReturnMode", it.name) }
                 put("beastOrder", order)
             })
         }

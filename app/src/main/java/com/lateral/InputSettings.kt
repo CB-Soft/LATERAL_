@@ -18,6 +18,10 @@ object InputSettings {
     private const val KEY_INVERT_SCROLLBAR_SCROLL = "invert_scrollbar_scroll"
     private const val KEY_MOMENTUM = "scroll_momentum"
     private const val KEY_ULTRAWIDE = "beast_ultrawide"
+    private const val KEY_BEAST_TIMING_SET = "beast_timing_set"
+    private const val KEY_BEAST_TIMING_WIDTH = "beast_timing_width"
+    private const val KEY_BEAST_TIMING_HEIGHT = "beast_timing_height"
+    private const val KEY_BEAST_TIMING_REFRESH = "beast_timing_refresh"
     private const val KEY_STANDARD_UI_SCALE = "standard_ui_scale"
     private const val KEY_ULTRAWIDE_UI_SCALE = "ultrawide_ui_scale"
     private const val KEY_STANDARD_FONT_SCALE = "standard_font_scale"
@@ -47,6 +51,8 @@ object InputSettings {
     @Volatile var momentumEnabled = true
         private set
     @Volatile var ultrawideEnabled = false
+        private set
+    @Volatile var preferredBeastTiming: BeastTiming? = null
         private set
     @Volatile var standardUiScale = 1.10f
         private set
@@ -97,6 +103,19 @@ object InputSettings {
         )
         momentumEnabled = prefs.getBoolean(KEY_MOMENTUM, true)
         ultrawideEnabled = prefs.getBoolean(KEY_ULTRAWIDE, false)
+        preferredBeastTiming = if (prefs.getBoolean(KEY_BEAST_TIMING_SET, false)) {
+            BeastTiming(
+                prefs.getInt(KEY_BEAST_TIMING_WIDTH, 0),
+                prefs.getInt(KEY_BEAST_TIMING_HEIGHT, 0),
+                prefs.getInt(KEY_BEAST_TIMING_REFRESH, 0),
+            ).takeIf(BeastTiming::isValid)
+        } else if (ultrawideEnabled) {
+            // Migrate the older ultrawide-only preference to the first supported
+            // ultrawide timing. Later timing changes are stored exactly.
+            BeastTiming(3840, 1200, 60)
+        } else {
+            null
+        }
         standardUiScale = prefs.getFloat(KEY_STANDARD_UI_SCALE, 1.10f).coerceIn(.85f, 2.00f)
         ultrawideUiScale = prefs.getFloat(KEY_ULTRAWIDE_UI_SCALE, 1.50f).coerceIn(.85f, 5.00f)
         // UI geometry is authoritative for the one consolidated appearance scale.
@@ -264,6 +283,25 @@ object InputSettings {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_ULTRAWIDE, value).apply()
         appearanceListeners.forEach { it() }
+    }
+
+    fun setPreferredBeastTiming(context: Context, timing: BeastTiming) {
+        if (!timing.isValid()) return
+        preferredBeastTiming = timing
+        ultrawideEnabled = timing.isUltrawide
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_BEAST_TIMING_SET, true)
+            .putInt(KEY_BEAST_TIMING_WIDTH, timing.width)
+            .putInt(KEY_BEAST_TIMING_HEIGHT, timing.height)
+            .putInt(KEY_BEAST_TIMING_REFRESH, timing.refreshRate)
+            .putBoolean(KEY_ULTRAWIDE, timing.isUltrawide)
+            .apply()
+        appearanceListeners.forEach { it() }
+    }
+
+    data class BeastTiming(val width: Int, val height: Int, val refreshRate: Int) {
+        val isUltrawide: Boolean get() = width >= 3000
+        fun isValid(): Boolean = width > 0 && height > 0 && refreshRate > 0
     }
 
     data class PhoneAppConfiguration(val densityDpi: Int, val fontScale: Float, val windowHeightPx: Int)

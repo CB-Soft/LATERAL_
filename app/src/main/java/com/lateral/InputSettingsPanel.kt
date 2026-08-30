@@ -18,6 +18,8 @@ object InputSettingsPanel {
     fun show(
         context: Context,
         onModalVisibilityChanged: (Boolean) -> Unit = {},
+        onDialogWindowCreated: (android.app.Dialog) -> Unit = {},
+        onDialogWindowDismissed: (android.app.Dialog) -> Unit = {},
     ) {
         val activity = context as? Activity ?: return
         if (activity.isFinishing || activity.isDestroyed) return
@@ -30,6 +32,12 @@ object InputSettingsPanel {
         val padding = (20 * density).toInt()
         fun dp(value: Int) = (value * density).toInt()
         fun colorHex(color: Int) = "#%06X".format(color and 0xFFFFFF)
+        fun showTrackedDialog(builder: android.app.AlertDialog.Builder) {
+            val childDialog = builder.create()
+            childDialog.setOnShowListener { onDialogWindowCreated(childDialog) }
+            childDialog.setOnDismissListener { onDialogWindowDismissed(childDialog) }
+            childDialog.show()
+        }
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding / 2, padding, 0)
@@ -165,14 +173,13 @@ object InputSettingsPanel {
                 update()
                 setOnClickListener {
                     val choices = BarAlignment.entries.map { it.name.lowercase() }.toTypedArray()
-                    android.app.AlertDialog.Builder(context)
+                    showTrackedDialog(android.app.AlertDialog.Builder(context)
                         .setTitle(title)
                         .setSingleChoiceItems(choices, current().ordinal) { dialog, which ->
                             set(BarAlignment.entries[which])
                             update()
                             dialog.dismiss()
-                        }
-                        .show()
+                        })
                 }
             }
         val toolbarAlignment = alignmentControl(
@@ -250,7 +257,7 @@ object InputSettingsPanel {
             setTextColor(InputSettings.accentColor)
             setPadding(0, dp(18), 0, dp(18))
             setOnClickListener {
-                android.app.AlertDialog.Builder(context)
+                showTrackedDialog(android.app.AlertDialog.Builder(context)
                     .setTitle("LATERAL_ / licenses")
                     .setMessage(
                         "Embedded keyboard: FlorisBoard v0.5.2\n" +
@@ -261,7 +268,7 @@ object InputSettingsPanel {
                             "and NOTICE.\n\nhttps://www.apache.org/licenses/LICENSE-2.0",
                     )
                     .setPositiveButton("Done", null)
-                    .show()
+                )
             }
         }
         panel.addView(sensitivityLabel)
@@ -285,16 +292,20 @@ object InputSettingsPanel {
         panel.addView(about)
         val scrollPanel = ScrollView(context).apply { addView(panel) }
         try {
-            dialog = android.app.AlertDialog.Builder(context)
+            val settingsDialog = android.app.AlertDialog.Builder(context)
                 .setTitle("LATERAL_ / settings")
                 .setView(scrollPanel)
                 .setPositiveButton("Done", null)
-                .show()
-            onModalVisibilityChanged(true)
-            dialog?.setOnDismissListener {
+                .create()
+            dialog = settingsDialog
+            settingsDialog.setOnShowListener { onDialogWindowCreated(settingsDialog) }
+            settingsDialog.setOnDismissListener {
+                onDialogWindowDismissed(settingsDialog)
                 lease.release()
                 onModalVisibilityChanged(false)
             }
+            settingsDialog.show()
+            onModalVisibilityChanged(true)
         } catch (error: RuntimeException) {
             lease.release()
             onModalVisibilityChanged(false)

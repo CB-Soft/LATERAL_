@@ -1,5 +1,7 @@
 package com.lateral.privileged
 
+import com.lateral.BuildConfig
+
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -34,7 +36,7 @@ object PairingNotifier {
     const val KEY_PAIRING_CODE = "pairing_code"
 
     /** Broadcast action [PairingInputReceiver] listens for. */
-    const val ACTION_SUBMIT_CODE = "com.lateral.privileged.SUBMIT_PAIRING_CODE"
+    val ACTION_SUBMIT_CODE = BuildConfig.APPLICATION_ID + ".privileged.SUBMIT_PAIRING_CODE"
 
     fun canPost(context: Context): Boolean =
         android.os.Build.VERSION.SDK_INT < 33 ||

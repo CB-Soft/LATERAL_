@@ -1,5 +1,16 @@
 # Roadmap
 
+## v0.2 foundation status
+
+- **Architecture charter:** documented and canonicalized in
+  [ARCHITECTURE_CHARTER.md](ARCHITECTURE_CHARTER.md). Shared task identity,
+  one-dimensional workspace behavior, PhoneUI/BeastUI state ownership,
+  lifecycle semantics, and phased implementation intent are the current design
+  contract.
+- **Termux/Box64 build worker:** contract and conservative reference worker are
+  documented in [termux/README.md](../termux/README.md). It is a delegated build
+  seam only; Android app integration remains future work.
+
 ## Future releases
 
 - **SDK-free monitor build:** after additional testing with non-VITURE external

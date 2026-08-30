@@ -2,6 +2,11 @@
 
 LATERAL_ is a device-specific dual-display workspace for a Nubia NX789J phone and VITURE Beast glasses. It keeps a purpose-built **PhoneUI** on the phone and a pinned **BeastUI** workspace on the glasses, while treating Android task IDs as the identity of the apps being managed.
 
+Architecture status: the v0.2 design invariants are canonicalized in the
+[architecture charter](docs/ARCHITECTURE_CHARTER.md). The conservative
+[Termux/Box64 Gradle worker contract](termux/README.md) is documented for
+delegated builds; it is not wired into the Android app yet.
+
 This is an experimental Android project for the target hardware, not a general-purpose external-display launcher.
 
 ## Intended use and tested hardware
@@ -48,7 +53,8 @@ Behavior therefore depends on the NX789J firmware, Android build, and the connec
 ## Requirements
 
 - Nubia NX789J running the supported Android 15 firmware.
-- VITURE Beast glasses connected as an external display.
+- An external display for monitor mode; VITURE Beast glasses are supported by
+  the optional SDK-backed variant.
 - Developer options and Wireless debugging enabled for the initial privileged-helper pairing.
 - Android Studio with JDK 17 and an Android SDK/NDK installation suitable for the project.
 - Rust stable (minimal profile) and CMake 4.1.2 for FlorisBoard's arm64 native engine.
@@ -56,24 +62,52 @@ Behavior therefore depends on the NX789J firmware, Android build, and the connec
 
 ## Build and install
 
-See the complete [installation guide](docs/INSTALLATION.md) for the published
-APK, source builds, VITURE SDK setup, Wireless debugging pairing, and
-troubleshooting.
+The public stable APK is the SDK-free monitor build. It does not contain the
+VITURE SDK, does not require a VITURE developer account, and keeps VITURE-only
+display timing controls out of the app. Build it locally with:
+
+```powershell
+.\gradlew.bat :app:assembleStableRelease "-Plateral.vitureSdk=false"
+```
+
+### Optional VITURE variant
+
+VITURE support is completely optional. Users who want the VITURE-specific
+display timing and glasses controls should request access to the official VITURE
+SDK from [VITURE's developer portal](https://www.viture.com/en-US/developer),
+download it under VITURE's terms, and place its headers and ARM64 runtime in the
+private `uxspace/Android/glasses/src/main/` layout described in the
+[installation guide](docs/INSTALLATION.md). Do not commit or redistribute the
+SDK files.
+
+With that SDK present, build the separate green-logo `LATERAL_ (V)` variant:
+
+```powershell
+.\gradlew.bat :app:assembleVitureRelease "-Plateral.vitureSdk=true"
+```
+
+The VITURE variant intentionally fails at build time when the SDK is absent.
+The regular public `stable` variant remains SDK-free when built with
+`-Plateral.vitureSdk=false`.
+
+See the complete [installation guide](docs/INSTALLATION.md) for public APK
+installation, source builds, optional VITURE SDK setup, Wireless debugging
+pairing, and troubleshooting.
 
 From the repository root:
 
 ```powershell
 git submodule update --init --recursive
-.\gradlew.bat :app:assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+.\gradlew.bat :app:assembleStableDebug "-Plateral.vitureSdk=false"
+adb install -r app\build\outputs\apk\stable\debug\app-stable-debug.apk
 ```
 
 On macOS/Linux, use:
 
 ```bash
 git submodule update --init --recursive
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:assembleStableDebug "-Plateral.vitureSdk=false"
+adb install -r app/build/outputs/apk/stable/debug/app-stable-debug.apk
 ```
 
 ## First-use flow
@@ -116,6 +150,8 @@ Ultrawide mode is detected from the connected display. LATERAL_ corrects for the
 - `third_party/florisboard/` — pinned FlorisBoard v0.5.2 fork and isolated `:embedded` library.
 - `docs/FLORISBOARD_EMBEDDED.md` — embedded-IME architecture and upstream upgrade workflow.
 - `docs/BEAST_UI.md` — BeastUI architecture and invariants.
+- `docs/ARCHITECTURE_CHARTER.md` — canonical shared-state, UI, lifecycle, and phased implementation contract.
+- `termux/README.md` — Termux/Box64 Gradle worker contract, safe worker usage, and fake-worker tests.
 - `LATERAL_ Outline.md` — product/design reference.
 - `docs/ROADMAP.md` — planned SDK-free monitor release and future work.
 

@@ -12,4 +12,11 @@
     <string name="msg_attempted_launch">Attempted launch on display %1$d</string>
     <string name="msg_launch_failed">FAILED:\n%1$s\n%2$s</string>
     <string name="accessibility_description">Controls applications running on an external display.</string>
+    <string name="adb_bridge_dialog_title">ADB input bridge unavailable</string>
+    <string name="adb_bridge_dialog_later">Later</string>
+    <string name="adb_bridge_open_wireless_debugging">Open Wireless debugging</string>
+    <string name="adb_bridge_start_pairing">Start pairing</string>
+    <string name="adb_bridge_developer_options_message">Enable Developer options, then turn on Wireless debugging so LATERAL_ can provide input.</string>
+    <string name="adb_bridge_wireless_message">Turn on Wireless debugging in Developer options so LATERAL_ can provide input.</string>
+    <string name="adb_bridge_pairing_message">LATERAL_ needs a one-time pairing with this device.\n\n1. Tap Start pairing here.\n2. In Developer options, open Wireless debugging and tap Pair device with pairing code.\n3. Leave that dialog open and enter its 6-digit code in the LATERAL_ pairing notification from the notification shade.</string>
 </resources>

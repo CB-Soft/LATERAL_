@@ -1,5 +1,7 @@
 package com.lateral.beast
 
+import com.lateral.BuildConfig
+
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -129,7 +131,7 @@ class BeastDisplayModeController(private val context: Context) {
     ): Int
 
     companion object {
-        private const val ACTION_USB_PERMISSION = "com.lateral.BEAST_USB_PERMISSION"
+        private val ACTION_USB_PERMISSION = BuildConfig.APPLICATION_ID + ".BEAST_USB_PERMISSION"
         private const val VITURE_VENDOR_ID = 0x35ca
         private val BEAST_PRODUCT_IDS = setOf(0x1201, 0x1211)
         private const val SUCCESS = 0

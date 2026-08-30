@@ -1,5 +1,7 @@
 package com.lateral.privileged
 
+import com.lateral.BuildConfig
+
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.database.Cursor
@@ -63,8 +65,8 @@ class BinderReceiverProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
 
     companion object {
-        /** Provider authority — `content://com.lateral.privileged`. */
-        const val AUTHORITY = "com.lateral.privileged"
+        /** Variant-specific provider authority — `content://<applicationId>.privileged`. */
+        val AUTHORITY: String = "${BuildConfig.APPLICATION_ID}.privileged"
 
         /** `ContentResolver.call` method name the server uses to hand its Binder over. */
         const val METHOD_SET_BINDER = "setBinder"

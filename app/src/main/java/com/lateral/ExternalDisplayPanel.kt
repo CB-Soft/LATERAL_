@@ -25,6 +25,7 @@ object ExternalDisplayPanel {
         requestDisplayMode: (Display, Display.Mode, (Result<Unit>) -> Unit) -> Unit,
         isBeastDisplay: (Display) -> Boolean,
         requestBeastNativeTiming: (Int, Int, Int, (Result<Unit>) -> Unit) -> Unit,
+        vitureSdkEnabled: Boolean = true,
         onModalVisibilityChanged: (Boolean) -> Unit = {},
     ) {
         val activity = context as? Activity ?: return
@@ -144,7 +145,7 @@ object ExternalDisplayPanel {
         }
 
         fun updateBeastTimingControls(display: Display?) {
-            val visible = display != null && isBeastDisplay(display)
+            val visible = vitureSdkEnabled && display != null && isBeastDisplay(display)
             beastNativeTitle.visibility = if (visible) View.VISIBLE else View.GONE
             ultrawide.visibility = if (visible) View.VISIBLE else View.GONE
             beast1080.visibility = if (visible) View.VISIBLE else View.GONE
@@ -166,7 +167,11 @@ object ExternalDisplayPanel {
             val mode = display?.mode
             val connected = display != null && display.state == Display.STATE_ON && mode != null
             if (!connected || mode == null) {
-                displayInfo.text = "NO EXTERNAL DISPLAY\nConnect VITURE Beast to view display details."
+                displayInfo.text = if (vitureSdkEnabled) {
+                    "NO EXTERNAL DISPLAY\nConnect an external display to view details."
+                } else {
+                    "NO EXTERNAL DISPLAY\nConnect an external monitor to view details."
+                }
                 ultrawide.isEnabled = false
                 updateTimingControls(null)
                 updateBeastTimingControls(null)

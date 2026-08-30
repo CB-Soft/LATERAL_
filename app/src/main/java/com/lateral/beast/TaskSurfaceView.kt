@@ -104,6 +104,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                 return
             }
             resizeIfNeeded(width, height)
+            schedulePhoneFocusRepairAfterReattach(generation)
         } ?: createDisplayWhenReady()
         scheduleFrameWatchdog(generation)
     }
@@ -184,6 +185,17 @@ class TaskSurfaceView @JvmOverloads constructor(
         attempts = 0
         createDisplayWhenReady()
         scheduleFrameWatchdog(generation)
+    }
+
+    /** Reattaching a minimized card can expose Home on display 0. Repair only that
+     * transient state; a deliberate phone-side task switch must remain untouched. */
+    private fun schedulePhoneFocusRepairAfterReattach(generation: Int) {
+        val phoneTaskId = MainActivity.currentPhoneTaskId()
+        if (phoneTaskId < 0) return
+        mainHandler.postDelayed({
+            if (released || generation != surfaceGeneration) return@postDelayed
+            PrivilegedService.restorePhoneTaskIfStillHomeAsync(phoneTaskId)
+        }, PHONE_FOCUS_REATTACH_DELAY_MS)
     }
 
     /** Copies the current hosted app frame without including BeastUI chrome. */
@@ -363,6 +375,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                 return
             }
             onDisplayReady?.invoke(retainedId)
+            schedulePhoneFocusRepairAfterReattach(surfaceGeneration)
             requestFocus()
             return
         }
@@ -713,6 +726,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         private const val RETRY_MS = 250L
         private const val MAX_ATTEMPTS = 40
         private const val RECOVERY_SETTLE_MS = 500L
+        private const val PHONE_FOCUS_REATTACH_DELAY_MS = 180L
         private const val FRAME_WATCHDOG_MS = 1_500L
         private const val MAX_FRAME_REATTACH_ATTEMPTS = 2
         private const val PINCH_BASE_SPAN_FRACTION = .18f

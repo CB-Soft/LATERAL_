@@ -1,6 +1,9 @@
 package com.lateral.beast
 
+import com.lateral.BuildConfig
+
 import android.content.Context
+import android.app.Dialog
 import android.app.ActivityOptions
 import android.content.Intent
 import android.content.IntentFilter
@@ -37,6 +40,7 @@ import android.widget.OverScroller
 import android.text.TextUtils
 import android.view.inputmethod.InputMethodManager
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentHashMap
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,8 +58,8 @@ import com.lateral.privileged.PrivilegedService
 /** The external-display workspace: an ordered one-dimensional strip of Android tasks. */
 class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, BeastInputRouter.Handler {
     companion object {
-        const val ACTION_ENSURE_WORKSPACE = "com.lateral.action.ENSURE_BEAST_WORKSPACE"
-        const val ACTION_SHOW_LAUNCHER = "com.lateral.action.SHOW_BEAST_LAUNCHER"
+        val ACTION_ENSURE_WORKSPACE = BuildConfig.APPLICATION_ID + ".action.ENSURE_BEAST_WORKSPACE"
+        val ACTION_SHOW_LAUNCHER = BuildConfig.APPLICATION_ID + ".action.SHOW_BEAST_LAUNCHER"
         private const val MOMENTUM_DELAY_MS = 70L
         private const val MIN_FLING_VELOCITY = 120f
         private const val SHOW_ALL_BATCH_TIMEOUT_MS = 6_000L
@@ -115,6 +119,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private lateinit var launcherResults: LinearLayout
     private lateinit var launcherScroll: ScrollView
     private lateinit var cursorOverlay: BeastCursorOverlay
+    private val modalCursorOverlays = ConcurrentHashMap<Dialog, BeastCursorOverlay>()
     private lateinit var systemStatus: TextView
     private val scrollMomentum by lazy { OverScroller(this) }
     private var momentumVelocity = 0f
@@ -212,6 +217,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val cursorListener: () -> Unit = {
         keepCursorOnTop()
         cursorOverlay.postInvalidateOnAnimation()
+        modalCursorOverlays.values.forEach { it.postInvalidateOnAnimation() }
         if (::root.isInitialized && !hoverUpdateQueued) {
             hoverUpdateQueued = true
             root.postOnAnimation(hoverUpdateFrame)
@@ -311,6 +317,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         screenshotController.close()
         launcherLease?.release()
         launcherLease = null
+        modalCursorOverlays.values.forEach { overlay ->
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }
+        modalCursorOverlays.clear()
         if (::displayManager.isInitialized) displayManager.unregisterDisplayListener(this)
         WorkspaceState.removeListener(stateListener)
         WorkspaceState.removeViewportListener(viewportListener)
@@ -674,6 +684,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val nextFontScale = InputSettings.fontScale(ultrawide)
         val fontScaleChanged = kotlin.math.abs(uiFontScale - nextFontScale) >= .01f
         uiFontScale = nextFontScale
+        cards.values.forEach(BeastTaskCard::refreshAccent)
         if ((elementScaleChanged || fontScaleChanged) && ::root.isInitialized) {
             rebuildUiForElementScale()
             return
@@ -828,7 +839,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         onFullscreen = {
             val currentMode = WorkspaceState.tasks.firstOrNull { it.id == task.id }?.mode ?: task.mode
             val nextMode = if (currentMode == PresentationMode.FULLSCREEN) {
-                PresentationMode.TABLET
+                WorkspaceState.tasks.firstOrNull { it.id == task.id }?.fullscreenReturnMode
+                    ?: PresentationMode.TABLET
             } else {
                 PresentationMode.FULLSCREEN
             }
@@ -951,9 +963,26 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     /** Shows edge controls only when tabs continue beyond the visible taskbar viewport. */
     private fun updateTaskbarOverflowControls() {
         if (!::taskbarScroll.isInitialized || taskbarScroll.width <= 0) return
-        val maxScroll = (taskbarContent.width - taskbarScroll.width).coerceAtLeast(0)
-        val canShowEarlier = maxScroll > 0 && taskbarScroll.scrollX > 0
-        val canShowLater = maxScroll > 0 && taskbarScroll.scrollX < maxScroll
+        val overflowing = taskbarContent.width > taskbarScroll.width
+        val contentParams = taskbarContent.layoutParams as? FrameLayout.LayoutParams
+        val expectedGravity = if (overflowing) {
+            Gravity.START or Gravity.CENTER_VERTICAL
+        } else {
+            alignmentGravity(InputSettings.taskbarAlignment)
+        }
+        if (contentParams != null && contentParams.gravity != expectedGravity) {
+            contentParams.gravity = expectedGravity
+            taskbarContent.layoutParams = contentParams
+            taskbarContent.post(::updateTaskbarOverflowControls)
+            return
+        }
+        val firstTab = taskTabs.getChildAt(0)
+        val lastTab = taskTabs.getChildAt(taskTabs.childCount - 1)
+        val contentOffset = taskbarContent.left - taskbarScroll.scrollX
+        val firstTabStart = firstTab?.left?.plus(contentOffset) ?: 0
+        val lastTabEnd = lastTab?.right?.plus(contentOffset) ?: 0
+        val canShowEarlier = overflowing && firstTabStart < 0
+        val canShowLater = overflowing && lastTabEnd > taskbarScroll.width
         val previousVisibility = if (canShowEarlier) View.VISIBLE else View.GONE
         val nextVisibility = if (canShowLater) View.VISIBLE else View.GONE
         if (taskbarPrevious.visibility != previousVisibility) {
@@ -1024,8 +1053,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             ViewGroup.LayoutParams.MATCH_PARENT,
             alignmentGravity(InputSettings.toolbarAlignment),
         ).apply {
-            marginStart = uiDp(76)
-            marginEnd = uiDp(220)
+            // Centered tools must use the full toolbar width. Asymmetric side
+            // reservations make the apparent center drift when UI scale changes.
+            when (InputSettings.toolbarAlignment) {
+                BarAlignment.LEFT -> marginStart = uiDp(76)
+                BarAlignment.RIGHT -> marginEnd = uiDp(220)
+                BarAlignment.CENTER -> Unit
+            }
         })
         toolbar.addView(label("LATERAL_", TOOLBAR_TEXT_SIZE, Color.rgb(178, 188, 187), bold = true).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
@@ -1097,11 +1131,36 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private fun showInputSettings() {
         InputSettingsPanel.show(
             context = this,
-            // Keep the workspace cursor live while the dialog is open. The dialog's
-            // own window is above BeastUI, so it receives clicks without suppressing
-            // the only visible pointer on the glasses.
             onModalVisibilityChanged = { cursorOverlay.visibility = View.VISIBLE },
+            onDialogWindowCreated = ::attachModalCursorOverlay,
+            onDialogWindowDismissed = ::detachModalCursorOverlay,
         )
+    }
+
+    /** Android dialogs are separate windows; mirror the workspace cursor into each one. */
+    private fun attachModalCursorOverlay(dialog: Dialog) {
+        val decor = dialog.window?.decorView as? ViewGroup ?: return
+        detachModalCursorOverlay(dialog)
+        val overlay = BeastCursorOverlay(
+            context = this,
+            displayCoordinates = true,
+            displayIdProvider = { display?.displayId ?: Display.DEFAULT_DISPLAY },
+        )
+        decor.addView(
+            overlay,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        modalCursorOverlays[dialog] = overlay
+        overlay.postInvalidateOnAnimation()
+    }
+
+    private fun detachModalCursorOverlay(dialog: Dialog) {
+        modalCursorOverlays.remove(dialog)?.let { overlay ->
+            (overlay.parent as? ViewGroup)?.removeView(overlay)
+        }
     }
 
     /** Keep the rendered pointer above every dynamically rebuilt BeastUI layer. */
@@ -1522,7 +1581,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 }
 
 /** Non-interactive, workspace-owned cursor that remains visible on the glasses. */
-private class BeastCursorOverlay(context: android.content.Context) : View(context) {
+internal class BeastCursorOverlay(
+    context: android.content.Context,
+    private val displayCoordinates: Boolean = false,
+    private val displayIdProvider: () -> Int = { Display.DEFAULT_DISPLAY },
+) : View(context) {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(20, 24, 24)
@@ -1539,8 +1602,20 @@ private class BeastCursorOverlay(context: android.content.Context) : View(contex
     override fun onDraw(canvas: Canvas) {
         val state = WorkspaceCursor.position()
         if (!state.visible || width == 0 || height == 0) return
-        val x = state.xFraction * width
-        val y = state.yFraction * height
+        val locationOnScreen = IntArray(2)
+        val viewport = WorkspaceCursor.viewport(displayIdProvider())
+        val x: Float
+        val y: Float
+        if (displayCoordinates && viewport != null) {
+            // The pointer fractions are display-space coordinates. A dialog's
+            // decor has its own window origin, so translate into that origin.
+            getLocationOnScreen(locationOnScreen)
+            x = state.xFraction * viewport.width - locationOnScreen[0]
+            y = state.yFraction * viewport.height - locationOnScreen[1]
+        } else {
+            x = state.xFraction * width
+            y = state.yFraction * height
+        }
         val size = resources.displayMetrics.density * 18f
         pointer.reset()
         pointer.moveTo(x, y)
@@ -1766,9 +1841,16 @@ private class BeastTaskCard(
         surface.isEnabled = routingAvailable
         surface.alpha = if (routingAvailable) 1f else .22f
         modeButton.text = task.mode.marker
+        fullscreenExit.text = "[${task.fullscreenReturnMode?.marker ?: PresentationMode.TABLET.marker}]"
         focusRule.setBackgroundColor(if (focused) InputSettings.accentColor else Color.TRANSPARENT)
         updateCaptureAvailability()
         refreshBackAvailability()
+    }
+
+    fun refreshAccent() {
+        modeButton.setTextColor(InputSettings.accentColor)
+        fullscreenExit.setTextColor(InputSettings.accentColor)
+        focusRule.setBackgroundColor(if (focused) InputSettings.accentColor else Color.TRANSPARENT)
     }
 
     fun setFullscreen(fullscreen: Boolean) {

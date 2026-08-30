@@ -35,16 +35,22 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
 import dev.patrickgold.florisboard.embedded.EmbeddedFlorisKeyboardView
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     companion object {
-        const val ACTION_BEAST_LAUNCHER_SEARCH = "com.lateral.action.BEAST_LAUNCHER_SEARCH"
+        val ACTION_BEAST_LAUNCHER_SEARCH = BuildConfig.APPLICATION_ID + ".action.BEAST_LAUNCHER_SEARCH"
         private const val WORKSPACE_GUARD_INTERVAL_MS = 350L
         private const val WORKSPACE_RELAUNCH_GUARD_MS = 1200L
         private const val PHONE_GESTURE_GUARD_DP = 24
         private const val PHONE_DISPLAY_SETTLE_MS = 220L
         private const val PHONE_DISPLAY_REPAIR_DELAY_MS = 250L
         private const val MAX_PHONE_DISPLAY_REPAIR_ATTEMPTS = 12
+        private const val WIRELESS_DEBUGGING_SETTINGS_ACTION =
+            "android.settings.WIRELESS_DEBUGGING_SETTINGS"
+        private const val SETTINGS_SHOW_FRAGMENT_EXTRA = ":settings:show_fragment"
+        private const val WIRELESS_DEBUGGING_FRAGMENT =
+            "com.android.settings.development.WirelessDebuggingFragment"
         private val ACCENT get() = InputSettings.accentColor
         @Volatile private var livePhoneTaskId = -1
 
@@ -81,6 +87,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private var externalDisplay: Display? = null
     private var launchedBeastDisplayId: Int? = null
     private var clearedExternalDisplayId: Int? = null
+    private var restoredBeastTimingDisplayId: Int? = null
+    private var beastTimingRestoreInFlight = false
     private var lastWorkspaceLaunchAt = 0L
     private var phoneDisplayRepairAttempts = 0
     private var activityResumed = false
@@ -89,6 +97,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private var nextPhoneFocusLeaseToken = 1L
     private val phoneFocusLeaseTokens = linkedSetOf<Long>()
     private var beastSearchFocusLease: PhoneWindowFocusLease? = null
+    private var adbBridgeDialog: android.app.AlertDialog? = null
+    private var lastPromptedBridgeState: PrivilegedService.State? = null
     private val beastSearchListener: () -> Unit = {
         runOnUiThread {
             if (::beastSearchField.isInitialized) syncBeastSearchField()
@@ -147,6 +157,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 hostedKeyboardController.onHelperUnavailable()
             }
             syncPairingNotification()
+            maybeShowAdbBridgeDialog()
         }
     }
     private val workspaceStateListener: () -> Unit = {
@@ -307,6 +318,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         window.decorView.post(::syncPhoneHostedAppConfiguration)
         window.decorView.post(phoneDisplayRepair)
         window.decorView.post(workspaceGuard)
+        window.decorView.post(::maybeShowAdbBridgeDialog)
         AndroidTaskSynchronizer.requestImmediate()
     }
 
@@ -373,6 +385,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             inputController.setDisplay(null)
             launchedBeastDisplayId = null
             clearedExternalDisplayId = null
+            restoredBeastTimingDisplayId = null
+            beastTimingRestoreInFlight = false
         } else {
             inputController.setDisplay(display)
 
@@ -393,9 +407,45 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             }
 
             val shape = if (hardwareUltrawide) "uw" else "${mode.physicalWidth}"
-            connectionText.text = "beast:$shape"
+            connectionText.text = if (BuildConfig.VITURE_SDK_ENABLED) {
+                "beast:$shape"
+            } else {
+                "display:$shape"
+            }
 
             trackpad.isEnabled = true
+            restorePreferredBeastTiming(display)
+        }
+    }
+
+    private fun restorePreferredBeastTiming(display: Display) {
+        if (!BuildConfig.VITURE_SDK_ENABLED ||
+            !beastDisplayModeController.isBeastConnected() ||
+            restoredBeastTimingDisplayId == display.displayId || beastTimingRestoreInFlight
+        ) return
+        val timing = InputSettings.preferredBeastTiming ?: return
+        val mode = display.mode
+        if (mode.physicalWidth == timing.width && mode.physicalHeight == timing.height &&
+            mode.refreshRate.roundToInt() == timing.refreshRate
+        ) {
+            restoredBeastTimingDisplayId = display.displayId
+            return
+        }
+
+        beastTimingRestoreInFlight = true
+        WorkspaceState.beginDisplayModeSwitch(timing.isUltrawide)
+        beastDisplayModeController.setNativeTiming(
+            timing.width,
+            timing.height,
+            timing.refreshRate,
+        ) { result ->
+            beastTimingRestoreInFlight = false
+            result.onSuccess {
+                restoredBeastTimingDisplayId = display.displayId
+                InputSettings.setPreferredBeastTiming(applicationContext, timing)
+            }.onFailure {
+                WorkspaceState.cancelDisplayModeSwitch()
+            }
         }
     }
 
@@ -519,6 +569,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         addCommand(controls, "apps") { showPhoneLauncher() }
         addCommand(controls, "disp") { showExternalDisplaySettings() }
         addCommand(controls, "set") { showInputSettings() }
+        if (BuildConfig.FLAVOR == "dev") {
+            addCommand(controls, "agent") { showAgentPanel() }
+        }
 
         beastSearchField = PhoneProxyEditText(this).apply {
             hint = "Beast app search"
@@ -736,6 +789,16 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         )
     }
 
+    private fun showAgentPanel() {
+        HostedTextInputSession.close()
+        val focusLease = acquirePhoneWindowFocus()
+        AgentPanel.show(
+            activity = this,
+            controller = (application as LateralApp).agentController,
+            onModalVisibilityChanged = { visible -> if (!visible) focusLease.release() },
+        )
+    }
+
     private fun showExternalDisplaySettings() {
         HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
@@ -744,15 +807,32 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             displayProvider = { externalDisplay },
             requestUltrawide = { enabled, complete ->
                 WorkspaceState.beginDisplayModeSwitch(enabled)
-                beastDisplayModeController.setUltrawide(enabled) { result ->
+                val refreshRate = InputSettings.preferredBeastTiming?.refreshRate
+                    ?: externalDisplay?.mode?.refreshRate?.roundToInt()?.takeIf { it > 0 }
+                    ?: 60
+                val height = if (enabled) 1200 else {
+                    externalDisplay?.mode?.physicalHeight?.takeIf { it == 1080 || it == 1200 }
+                        ?: 1200
+                }
+                val timing = InputSettings.BeastTiming(
+                    if (enabled) 3840 else 1920,
+                    height,
+                    refreshRate,
+                )
+                beastDisplayModeController.setNativeTiming(
+                    timing.width,
+                    timing.height,
+                    timing.refreshRate,
+                ) { result ->
                     result.onSuccess {
+                        InputSettings.setPreferredBeastTiming(applicationContext, timing)
                         // Display callbacks, not a guessed delay, complete the handoff once
                         // the newly enumerated timing reports the requested geometry.
                         updateExternalDisplay()
                     }.onFailure {
                         WorkspaceState.cancelDisplayModeSwitch()
                     }
-                    complete(result)
+                    complete(result.map { enabled })
                 }
             },
             requestDisplayMode = { display, mode, complete ->
@@ -764,6 +844,16 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                     mode.refreshRate,
                 ) { applied ->
                     if (applied) {
+                        if (beastDisplayModeController.isBeastConnected()) {
+                            InputSettings.setPreferredBeastTiming(
+                                applicationContext,
+                                InputSettings.BeastTiming(
+                                    mode.physicalWidth,
+                                    mode.physicalHeight,
+                                    mode.refreshRate.roundToInt(),
+                                ),
+                            )
+                        }
                         updateExternalDisplay()
                         complete(Result.success(Unit))
                     } else {
@@ -772,11 +862,17 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                     }
                 }
             },
-            isBeastDisplay = { beastDisplayModeController.isBeastConnected() },
+            isBeastDisplay = {
+                BuildConfig.VITURE_SDK_ENABLED && beastDisplayModeController.isBeastConnected()
+            },
             requestBeastNativeTiming = { width, height, refreshRate, complete ->
                 WorkspaceState.beginDisplayModeSwitch(width >= 3000)
                 beastDisplayModeController.setNativeTiming(width, height, refreshRate) { result ->
                     result.onSuccess {
+                        InputSettings.setPreferredBeastTiming(
+                            applicationContext,
+                            InputSettings.BeastTiming(width, height, refreshRate),
+                        )
                         updateExternalDisplay()
                     }.onFailure {
                         WorkspaceState.cancelDisplayModeSwitch()
@@ -784,6 +880,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                     complete(result)
                 }
             },
+            vitureSdkEnabled = BuildConfig.VITURE_SDK_ENABLED,
             onModalVisibilityChanged = { visible -> if (!visible) focusLease.release() },
         )
     }
@@ -796,6 +893,92 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             Toast.LENGTH_LONG,
         ).show()
         startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+    }
+
+    /** Prompt once for each stable unavailable state while the PhoneUI is visible. */
+    private fun maybeShowAdbBridgeDialog() {
+        if (!activityResumed || isFinishing || isDestroyed || !::inputDebugText.isInitialized) return
+
+        val state = PrivilegedService.state
+        if (state == PrivilegedService.State.READY) {
+            lastPromptedBridgeState = null
+            adbBridgeDialog?.dismiss()
+            return
+        }
+        if (state !in setOf(
+                PrivilegedService.State.NEEDS_DEVELOPER_OPTIONS,
+                PrivilegedService.State.NEEDS_WIRELESS_DEBUGGING,
+                PrivilegedService.State.NEEDS_PAIRING,
+            ) || lastPromptedBridgeState == state || adbBridgeDialog?.isShowing == true
+        ) return
+
+        lastPromptedBridgeState = state
+        val focusLease = acquirePhoneWindowFocus()
+        val pairingRequired = state == PrivilegedService.State.NEEDS_PAIRING
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle(getString(R.string.adb_bridge_dialog_title))
+            .setMessage(
+                when (state) {
+                    PrivilegedService.State.NEEDS_DEVELOPER_OPTIONS ->
+                        getString(R.string.adb_bridge_developer_options_message)
+                    PrivilegedService.State.NEEDS_PAIRING ->
+                        getString(R.string.adb_bridge_pairing_message)
+                    else ->
+                        getString(R.string.adb_bridge_wireless_message)
+                },
+            )
+            .setNegativeButton(R.string.adb_bridge_dialog_later, null)
+            .setPositiveButton(
+                if (pairingRequired) R.string.adb_bridge_start_pairing
+                else R.string.adb_bridge_open_wireless_debugging,
+            ) { _, _ ->
+                if (pairingRequired) {
+                    if (android.os.Build.VERSION.SDK_INT >= 33 && !PairingNotifier.canPost(this)) {
+                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        beginPairingSetup()
+                    }
+                } else {
+                    openWirelessDebuggingSettings()
+                }
+            }
+            .create()
+            .also { created ->
+                adbBridgeDialog = created
+                created.setOnDismissListener {
+                    if (adbBridgeDialog === created) adbBridgeDialog = null
+                    focusLease.release()
+                }
+            }
+        try {
+            dialog.show()
+        } catch (error: RuntimeException) {
+            adbBridgeDialog = null
+            focusLease.release()
+            Toast.makeText(this, error.message ?: "Could not open Wireless debugging", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Android has no stable public direct action; use it when present, then the tested fallback. */
+    private fun openWirelessDebuggingSettings() {
+        val direct = Intent(WIRELESS_DEBUGGING_SETTINGS_ACTION)
+        if (direct.resolveActivity(packageManager) != null) {
+            startActivity(direct)
+            return
+        }
+
+        val developerOptions = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+            putExtra(SETTINGS_SHOW_FRAGMENT_EXTRA, WIRELESS_DEBUGGING_FRAGMENT)
+        }
+        try {
+            startActivity(developerOptions)
+        } catch (error: RuntimeException) {
+            Toast.makeText(
+                this,
+                error.message ?: "Could not open Developer options",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
     }
 
     private fun syncPairingNotification() {

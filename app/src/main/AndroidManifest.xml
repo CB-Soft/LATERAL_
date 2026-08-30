@@ -9,28 +9,30 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
         android:name=".LateralApp"
+        android:usesCleartextTraffic="true"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="${lateralLauncherIcon}"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:roundIcon="${lateralLauncherRoundIcon}"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lateral">
         <provider
             android:name=".privileged.BinderReceiverProvider"
-            android:authorities="com.lateral.privileged"
+            android:authorities="${lateralPrivilegedAuthority}"
             android:enabled="true"
             android:exported="true" />
         <receiver
             android:name=".privileged.PairingInputReceiver"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.lateral.privileged.SUBMIT_PAIRING_CODE" />
+                <action android:name="${lateralPairingAction}" />
             </intent-filter>
         </receiver>
         <activity
@@ -52,7 +54,7 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:resizeableActivity="true"
-            android:taskAffinity="com.lateral.beast"
+            android:taskAffinity="${lateralBeastTaskAffinity}"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode"
             android:theme="@style/Theme.Lateral.Beast"
             android:windowSoftInputMode="stateAlwaysHidden|adjustNothing" />

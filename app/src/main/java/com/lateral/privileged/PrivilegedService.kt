@@ -690,6 +690,10 @@ object PrivilegedService {
             .getOrDefault(false)
     }
 
+    fun restorePhoneTaskIfStillHomeAsync(taskId: Int) {
+        worker.execute { restorePhoneTaskIfStillHome(taskId) }
+    }
+
     fun focusPhoneTaskAsync(taskId: Int, callback: (Boolean) -> Unit) {
         worker.execute {
             val focused = startRecentTaskOnDisplay(taskId, android.view.Display.DEFAULT_DISPLAY)
