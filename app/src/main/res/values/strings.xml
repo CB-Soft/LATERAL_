@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">LATERAL_</string>
+    <string name="lateral_app_name">LATERAL_</string>
     <string name="privilege_pairing_hint">6-digit pairing code</string>
     <string name="privilege_action_pair">Pair</string>
     <string name="privilege_notification_title">LATERAL_ input setup</string>

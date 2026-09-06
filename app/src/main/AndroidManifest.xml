@@ -19,7 +19,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="${lateralLauncherIcon}"
-        android:label="@string/app_name"
+        android:label="@string/lateral_app_name"
         android:roundIcon="${lateralLauncherRoundIcon}"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lateral">
@@ -38,7 +38,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
+            android:label="@string/lateral_app_name"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Lateral"
             android:windowSoftInputMode="adjustResize">

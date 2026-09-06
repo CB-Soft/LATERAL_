@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">LATERAL_ dev</string>
+    <string name="lateral_app_name">LATERAL_ dev</string>
     <string name="privilege_notification_title">LATERAL_ dev input setup</string>
     <string name="privilege_notification_channel_desc">Pairs LATERAL_ dev with the local Android wireless-debugging service.</string>
 </resources>
