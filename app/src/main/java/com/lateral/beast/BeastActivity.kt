@@ -16,7 +16,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -70,7 +70,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         private const val TASKBAR_STEP_CONTROL_WIDTH_DP = 28
         private const val TASKBAR_SCROLL_STEP_FRACTION = .68f
         private const val SYSTEM_STATUS_INTERVAL_MS = 1_000L
-        private const val APP_DECORATOR_HEIGHT_DP = 32
+        private const val APP_DECORATOR_HEIGHT_DP = 30
         private const val APP_DECORATOR_MIN_WIDTH_DP = 300
         private const val TAG = "Lateral/Beast"
         private val BACKGROUND = Color.rgb(7, 8, 9)
@@ -685,6 +685,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val fontScaleChanged = kotlin.math.abs(uiFontScale - nextFontScale) >= .01f
         uiFontScale = nextFontScale
         cards.values.forEach(BeastTaskCard::refreshAccent)
+        if (::launcherPanel.isInitialized) applyLauncherBorder()
         if ((elementScaleChanged || fontScaleChanged) && ::root.isInitialized) {
             rebuildUiForElementScale()
             return
@@ -875,7 +876,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     private fun updateTaskSizes() {
         val cardHeight = workspaceScroll.height - taskStrip.paddingTop - taskStrip.paddingBottom
-        val appContentHeight = cardHeight - uiDp(APP_DECORATOR_HEIGHT_DP)
+        val appContentHeight = cardHeight - uiDp(APP_DECORATOR_HEIGHT_DP) -
+            dp(OMARCHY_WINDOW_BORDER_DP) * 2
         if (appContentHeight <= 0) return
         // Derive width from the actual app surface height remaining after the unified
         // UI/text scale has laid out the toolbar, taskbar, strip padding, and decorator.
@@ -1226,9 +1228,9 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         launcherPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(uiDp(28), uiDp(22), uiDp(28), uiDp(18))
-            background = borderBackground(Color.rgb(49, 62, 62))
             isClickable = true
         }
+        applyLauncherBorder()
         launcherQuery = EditText(this).apply {
             hint = "> _"
             isSingleLine = true
@@ -1564,9 +1566,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         setTextColor(color)
     }
 
-    private fun borderBackground(stroke: Int) = GradientDrawable().apply {
-        setColor(Color.rgb(10, 12, 13))
-        setStroke(dp(1), stroke)
+    private fun applyLauncherBorder() {
+        if (!::launcherPanel.isInitialized) return
+        launcherPanel.background = omarchyWindowBorder(
+            focused = true,
+            borderPx = dp(OMARCHY_WINDOW_BORDER_DP).coerceAtLeast(1),
+        )
     }
 
     /** Task surfaces retain native dimensions; only LATERAL_ chrome uses uiDp(). */
@@ -1648,7 +1653,6 @@ private class BeastTaskCard(
     var onClose: (() -> Unit)? = null
 
     private val column = LinearLayout(context)
-    private val focusRule = View(context)
     private val chrome = FrameLayout(context)
     private val appLabel = TextView(context)
     private val modeButton = TextView(context)
@@ -1663,6 +1667,7 @@ private class BeastTaskCard(
     private val controlBaseWidths = mutableMapOf<TextView, Int>()
     private var boundTask: BeastTask? = null
     private var focused = false
+    private var fullscreen = false
     private var backQueryGeneration = 0
     var uiScale = 1f
         set(value) {
@@ -1693,8 +1698,8 @@ private class BeastTaskCard(
         }
 
     init {
-        setBackgroundColor(Color.rgb(12, 14, 15))
         isClickable = true
+        clipToPadding = true
         setOnClickListener { controlDebouncer.submit { onFocus?.invoke() } }
         surface.onInteraction = {
             onFocus?.invoke()
@@ -1716,7 +1721,6 @@ private class BeastTaskCard(
             updateAppDensityForRenderedHeight()
         }
         column.orientation = LinearLayout.VERTICAL
-        focusRule.setBackgroundColor(Color.TRANSPARENT)
         chrome.setPadding(dp(8), 0, dp(4), 0)
         chrome.setBackgroundColor(Color.rgb(16, 19, 20))
         appLabel.typeface = Typeface.MONOSPACE
@@ -1801,7 +1805,6 @@ private class BeastTaskCard(
         chrome.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updateNavigationVisibility()
         }
-        column.addView(focusRule, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2)))
         column.addView(chrome, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         column.addView(surface, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(column, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -1842,7 +1845,7 @@ private class BeastTaskCard(
         surface.alpha = if (routingAvailable) 1f else .22f
         modeButton.text = task.mode.marker
         fullscreenExit.text = "[${task.fullscreenReturnMode?.marker ?: PresentationMode.TABLET.marker}]"
-        focusRule.setBackgroundColor(if (focused) InputSettings.accentColor else Color.TRANSPARENT)
+        applyWindowBorder()
         updateCaptureAvailability()
         refreshBackAvailability()
     }
@@ -1850,13 +1853,24 @@ private class BeastTaskCard(
     fun refreshAccent() {
         modeButton.setTextColor(InputSettings.accentColor)
         fullscreenExit.setTextColor(InputSettings.accentColor)
-        focusRule.setBackgroundColor(if (focused) InputSettings.accentColor else Color.TRANSPARENT)
+        applyWindowBorder()
     }
 
     fun setFullscreen(fullscreen: Boolean) {
+        this.fullscreen = fullscreen
         chrome.visibility = if (fullscreen) View.GONE else View.VISIBLE
-        focusRule.visibility = if (fullscreen) View.GONE else View.VISIBLE
         fullscreenExit.visibility = if (fullscreen) View.VISIBLE else View.GONE
+        applyWindowBorder()
+    }
+
+    private fun applyWindowBorder() {
+        val border = if (fullscreen) 0 else dp(OMARCHY_WINDOW_BORDER_DP).coerceAtLeast(1)
+        setPadding(border, border, border, border)
+        background = if (fullscreen) {
+            ColorDrawable(Color.rgb(12, 14, 15))
+        } else {
+            omarchyWindowBorder(focused, border)
+        }
     }
 
     private fun updateAppDensityForRenderedHeight() {
@@ -1933,10 +1947,7 @@ private class BeastTaskCard(
     private fun applyUiScale() {
         if (!::backButton.isInitialized || !::captureAppButton.isInitialized) return
         chrome.setPadding(decoratorDp(8), 0, decoratorDp(4), 0)
-        focusRule.layoutParams?.let {
-            it.height = decoratorDp(2)
-            focusRule.layoutParams = it
-        }
+        applyWindowBorder()
         chrome.layoutParams?.let {
             it.height = decoratorDp(30)
             chrome.layoutParams = it

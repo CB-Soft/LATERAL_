@@ -1,12 +1,41 @@
 package com.lateral.beast
 
 import android.graphics.Color
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.view.MotionEvent
 import android.view.View
 import android.widget.TextView
 import com.lateral.InputSettings
 import java.util.WeakHashMap
+
+internal const val OMARCHY_WINDOW_BORDER_DP = 2
+private val WINDOW_INTERIOR = Color.rgb(12, 14, 15)
+private val INACTIVE_BORDER = Color.argb(0xAA, 0x59, 0x59, 0x59)
+
+/** Omarchy-style 2px frame: 45° accent gradient when focused, muted gray otherwise. */
+internal fun omarchyWindowBorder(focused: Boolean, borderPx: Int): Drawable {
+    val outer = if (focused) {
+        GradientDrawable(GradientDrawable.Orientation.TL_BR, omarchyActiveBorderColors())
+    } else {
+        GradientDrawable().apply { setColor(INACTIVE_BORDER) }
+    }
+    val inner = GradientDrawable().apply { setColor(WINDOW_INTERIOR) }
+    return LayerDrawable(arrayOf(outer, inner)).apply {
+        setLayerInset(1, borderPx, borderPx, borderPx, borderPx)
+    }
+}
+
+private fun omarchyActiveBorderColors(): IntArray {
+    val hsv = FloatArray(3)
+    Color.colorToHSV(InputSettings.accentColor, hsv)
+    val start = Color.HSVToColor(0xEE, hsv)
+    hsv[0] = if (hsv[0] in 140f..175f) 193f else 156f
+    hsv[1] = hsv[1].coerceAtLeast(.75f)
+    hsv[2] = hsv[2].coerceAtLeast(.85f)
+    return intArrayOf(start, Color.HSVToColor(0xEE, hsv))
+}
 
 private data class BeastHoverState(
     val normalBackground: android.graphics.drawable.Drawable?,
