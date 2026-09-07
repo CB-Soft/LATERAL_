@@ -215,6 +215,7 @@ object InputSettingsPanel {
                 cornerRadius = dp(4).toFloat()
             }
         }
+        lateinit var refreshAccentWidgets: () -> Unit
         val accentWheel = AccentColorWheelView(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -223,7 +224,8 @@ object InputSettingsPanel {
             setSelection(InputSettings.accentHue, InputSettings.accentSaturation)
             onColorChanged = { hue, saturation, color ->
                 InputSettings.setAccent(context, hue, saturation)
-                updateAccentPreview(color)
+                updateAccentPreview(InputSettings.accentColor)
+                refreshAccentWidgets()
             }
         }
         val accentPreview = LinearLayout(context).apply {
@@ -241,7 +243,7 @@ object InputSettingsPanel {
                 InputSettings.resetAccent(context)
                 accentWheel.setSelection(InputSettings.accentHue, InputSettings.accentSaturation)
                 updateAccentPreview()
-                setTextColor(InputSettings.accentColor)
+                refreshAccentWidgets()
             }
         }
         updateAccentPreview()
@@ -271,6 +273,13 @@ object InputSettingsPanel {
                 )
             }
         }
+        refreshAccentWidgets = {
+            val accent = InputSettings.accentColor
+            personalizationTitle.setTextColor(accent)
+            resetAccent.setTextColor(accent)
+            about.setTextColor(accent)
+        }
+        refreshAccentWidgets()
         panel.addView(sensitivityLabel)
         panel.addView(sensitivity)
         panel.addView(scrollSensitivity)

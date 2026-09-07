@@ -685,6 +685,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val fontScaleChanged = kotlin.math.abs(uiFontScale - nextFontScale) >= .01f
         uiFontScale = nextFontScale
         cards.values.forEach(BeastTaskCard::refreshAccent)
+        if (::taskbarPrevious.isInitialized) {
+            taskbarPrevious.setTextColor(InputSettings.accentColor)
+            taskbarNext.setTextColor(InputSettings.accentColor)
+        }
+        refreshBeastHoverAppearance()
         if (::launcherPanel.isInitialized) applyLauncherBorder()
         if ((elementScaleChanged || fontScaleChanged) && ::root.isInitialized) {
             rebuildUiForElementScale()
@@ -694,6 +699,29 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         cards.values.forEach { it.fontScale = uiFontScale }
         updateHorizontalAspectCorrection()
         renderWorkspace()
+        refreshVisibleLauncher()
+    }
+
+    /** Rebuild only the visible launcher so its accent-colored controls repaint immediately. */
+    private fun refreshVisibleLauncher() {
+        if (!::launcher.isInitialized || launcher.visibility != View.VISIBLE) return
+        val parent = launcher.parent as? ViewGroup ?: return
+        val index = parent.indexOfChild(launcher)
+        if (index < 0) return
+        val query = launcherQuery.text.toString()
+        parent.removeViewAt(index)
+        launcher = buildLauncher()
+        parent.addView(
+            launcher,
+            index,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        launcher.visibility = View.VISIBLE
+        launcherQuery.setText(query)
+        populateLauncher(query)
     }
 
     /**

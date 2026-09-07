@@ -2,6 +2,7 @@ package com.lateral.beast
 
 import android.graphics.Color
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.view.MotionEvent
@@ -14,27 +15,17 @@ internal const val OMARCHY_WINDOW_BORDER_DP = 2
 private val WINDOW_INTERIOR = Color.rgb(12, 14, 15)
 private val INACTIVE_BORDER = Color.argb(0xAA, 0x59, 0x59, 0x59)
 
-/** Omarchy-style 2px frame: 45° accent gradient when focused, muted gray otherwise. */
+/** Omarchy-style 2px frame: a single accent color when focused, muted gray otherwise. */
 internal fun omarchyWindowBorder(focused: Boolean, borderPx: Int): Drawable {
     val outer = if (focused) {
-        GradientDrawable(GradientDrawable.Orientation.TL_BR, omarchyActiveBorderColors())
+        ColorDrawable(InputSettings.accentColor)
     } else {
-        GradientDrawable().apply { setColor(INACTIVE_BORDER) }
+        ColorDrawable(INACTIVE_BORDER)
     }
     val inner = GradientDrawable().apply { setColor(WINDOW_INTERIOR) }
     return LayerDrawable(arrayOf(outer, inner)).apply {
         setLayerInset(1, borderPx, borderPx, borderPx, borderPx)
     }
-}
-
-private fun omarchyActiveBorderColors(): IntArray {
-    val hsv = FloatArray(3)
-    Color.colorToHSV(InputSettings.accentColor, hsv)
-    val start = Color.HSVToColor(0xEE, hsv)
-    hsv[0] = if (hsv[0] in 140f..175f) 193f else 156f
-    hsv[1] = hsv[1].coerceAtLeast(.75f)
-    hsv[2] = hsv[2].coerceAtLeast(.85f)
-    return intArrayOf(start, Color.HSVToColor(0xEE, hsv))
 }
 
 private data class BeastHoverState(
@@ -92,5 +83,18 @@ internal fun updateBeastHover(view: View, hovered: Boolean) {
         view.background = state.normalBackground
         state.textColors.forEach { (text, color) -> text.setTextColor(color()) }
         view.alpha = state.normalAlpha
+    }
+}
+
+/** Repaint hover targets whose normal or active appearance depends on the accent. */
+internal fun refreshBeastHoverAppearance() {
+    val states = synchronized(hoverStates) {
+        hoverStates.entries.mapNotNull { (view, state) ->
+            view?.let { it to state }
+        }
+    }
+    states.forEach { (view, state) ->
+        if (state.hovered) view.background = beastHoverBackground(view)
+        state.textColors.forEach { (text, color) -> text.setTextColor(color()) }
     }
 }
