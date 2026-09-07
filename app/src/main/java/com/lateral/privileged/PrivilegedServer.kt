@@ -1159,7 +1159,22 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             return false
         }
 
-        val restored = bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY)
+        // REDMAGIC's startActivityFromRecents can return success without changing
+        // focus when the task is already on display 0. The shell move-stack command
+        // performs the actual focus transaction on this ROM; retain the reflective
+        // path as a fallback for builds where the command is unavailable.
+        val restored = startRecentTaskOnDisplay(phoneTaskId, Display.DEFAULT_DISPLAY) ||
+            bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY)
+        if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) != phoneTaskId) {
+            // Some Android builds keep the task in the default display but do not
+            // make it focused after either task-manager operation. Reordering the
+            // existing activity through ActivityTaskManager is the final, explicit
+            // focus request; CLEAR_TOP|SINGLE_TOP preserves the PhoneUI instance.
+            run(
+                "am", "start", "--display", Display.DEFAULT_DISPLAY.toString(),
+                "-n", PHONE_UI_COMPONENT, "-f", PHONE_UI_REPAIR_FLAGS,
+            )
+        }
         Log.i(TAG, "phone focus repair top=Home phone=$phoneTaskId restored=$restored")
         return restored
     }
@@ -2462,6 +2477,10 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         // we pass it via am's `--activity-exclude-from-recents` argument instead so it
         // doesn't ride in the same raw -f blob. See launchOnDisplay() for the reason.
         private const val FLAG_NEW_TASK_MULTIPLE = "0x18000000"
+
+        /** Existing PhoneUI activity used to reclaim focus after an OEM task race. */
+        private const val PHONE_UI_COMPONENT = "com.lateral/.MainActivity"
+        private const val PHONE_UI_REPAIR_FLAGS = "0x14000000" // NEW_TASK | CLEAR_TOP
 
         /** Frame spacing for the pinch interpolation in [pinchOnDisplay]. */
         private const val PINCH_STEP_MS = 8

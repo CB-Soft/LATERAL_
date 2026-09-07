@@ -1345,6 +1345,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 }, ActivityOptions.makeBasic().apply {
                     launchDisplayId = Display.DEFAULT_DISPLAY
                 }.toBundle())
+                // Starting MainActivity from the Beast display can expose Home on
+                // display 0 after the shell move. Repair after the launch has had a
+                // traversal to settle, and retry through the OEM transition window.
+                schedulePhoneUiFocusRepair()
             }
         }
         lateinit var lease: TransientPanelCoordinator.Lease
@@ -1379,6 +1383,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         launcherLease = null
         root.requestFocus()
         hideSystemKeyboard()
+    }
+
+    private fun schedulePhoneUiFocusRepair() {
+        longArrayOf(220L, 500L, 900L, 1_400L).forEach { delay ->
+            root.postDelayed({ MainActivity.restorePhoneUiAfterExternalTaskBatch() }, delay)
+        }
     }
 
     private fun restoreWorkspaceFocus() {

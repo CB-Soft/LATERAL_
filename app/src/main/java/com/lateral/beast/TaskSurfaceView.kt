@@ -433,7 +433,12 @@ class TaskSurfaceView @JvmOverloads constructor(
                 }
             } ?: false
             if (!resumed && exactTaskId == null) {
-                PrivilegedService.launchApp(id, item.packageName, item.activityName)
+                PrivilegedService.launchApp(
+                    id,
+                    item.packageName,
+                    item.activityName,
+                    MainActivity.currentPhoneTaskId(),
+                )
                 onTaskHosted?.invoke()
             } else if (resumed) {
                 onTaskHosted?.invoke()
@@ -713,7 +718,12 @@ class TaskSurfaceView @JvmOverloads constructor(
                     }
                 }
             } else {
-                PrivilegedService.launchApp(id, item.packageName, item.activityName)
+                PrivilegedService.launchApp(
+                    id,
+                    item.packageName,
+                    item.activityName,
+                    MainActivity.currentPhoneTaskId(),
+                )
                 mainHandler.postDelayed({ callback(true) }, RECOVERY_SETTLE_MS)
             }
         }

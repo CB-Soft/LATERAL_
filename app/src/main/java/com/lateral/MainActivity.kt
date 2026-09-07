@@ -34,12 +34,14 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.SystemClock
+import android.util.Log
 import dev.patrickgold.florisboard.embedded.EmbeddedFlorisKeyboardView
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     companion object {
         val ACTION_BEAST_LAUNCHER_SEARCH = BuildConfig.APPLICATION_ID + ".action.BEAST_LAUNCHER_SEARCH"
+        private const val ACTION_PHONE_FOCUS_REPAIR = BuildConfig.APPLICATION_ID + ".action.PHONE_FOCUS_REPAIR"
         private const val WORKSPACE_GUARD_INTERVAL_MS = 350L
         private const val WORKSPACE_RELAUNCH_GUARD_MS = 1200L
         private const val PHONE_GESTURE_GUARD_DP = 24
@@ -53,6 +55,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             "com.android.settings.development.WirelessDebuggingFragment"
         private val ACCENT get() = InputSettings.accentColor
         @Volatile private var livePhoneTaskId = -1
+        @Volatile private var phoneUiContext: Context? = null
 
         /** Stable Android identity used by helper-side focus-preserving task transactions. */
         fun currentPhoneTaskId(): Int = livePhoneTaskId
@@ -63,6 +66,23 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             if (taskId >= 0 && PrivilegedService.state == PrivilegedService.State.READY) {
                 PrivilegedService.restorePhoneTaskIfStillHome(taskId)
             }
+        }
+
+        /** Re-focus the existing PhoneUI task after a Beast-originated app launch race. */
+        fun bringPhoneUiToFrontAfterBeastAction() {
+            val context = phoneUiContext ?: return
+            runCatching {
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    action = ACTION_PHONE_FOCUS_REPAIR
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                val options = ActivityOptions.makeBasic().apply {
+                    launchDisplayId = Display.DEFAULT_DISPLAY
+                }.toBundle()
+                context.startActivity(intent, options)
+            }.onFailure { Log.w("Lateral/Focus", "PhoneUI foreground request failed", it) }
         }
     }
 
@@ -205,6 +225,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        phoneUiContext = applicationContext
         livePhoneTaskId = taskId
         BeastWorkspaceController.cleanupLegacyTasks(this)
         // LATERAL is the active phone-side controller while Beast is running. Keep the
@@ -269,7 +290,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         super.onNewIntent(intent)
         setIntent(intent)
         window.decorView.post {
-            if (intent.action == ACTION_BEAST_LAUNCHER_SEARCH) {
+            if (intent.action == ACTION_PHONE_FOCUS_REPAIR) {
+                // A foreground repair must not re-ensure Beast and start another
+                // cross-display transition; it only brings this existing task front.
+            } else if (intent.action == ACTION_BEAST_LAUNCHER_SEARCH) {
                 // Beast already owns the open launcher. Re-ensuring it here creates a
                 // second cross-display focus transition and can hide either UI.
                 showBeastLauncherSearchOnPhone()
@@ -302,6 +326,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         WorkspaceState.removeViewportListener(viewportStateListener)
         PrivilegedService.mouseDeltaHandler = null
         PrivilegedService.mouseButtonHandler = null
+        if (phoneUiContext === applicationContext) phoneUiContext = null
         super.onDestroy()
     }
 
@@ -1125,15 +1150,27 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun schedulePhoneFocusRepair(delayMs: Long) {
         cancelPhoneFocusRepair()
         val generation = phoneFocusRepairGeneration
-        val repair = Runnable {
-            if (generation != phoneFocusRepairGeneration || !activityResumed ||
-                isFinishing || isDestroyed || PrivilegedService.state != PrivilegedService.State.READY
-            ) return@Runnable
-            PrivilegedService.restorePhoneTaskIfStillHome(taskId)
-            pendingPhoneFocusRepair = null
+        val delays = longArrayOf(delayMs, 260L, 500L, 900L, 1_400L)
+        var attempt = 0
+        val repair = object : Runnable {
+            override fun run() {
+                if (generation != phoneFocusRepairGeneration || !activityResumed ||
+                    isFinishing || isDestroyed || PrivilegedService.state != PrivilegedService.State.READY
+                ) {
+                    pendingPhoneFocusRepair = null
+                    return
+                }
+                val restored = PrivilegedService.restorePhoneTaskIfStillHome(taskId)
+                attempt++
+                if (!restored && attempt < delays.size) {
+                    window.decorView.postDelayed(this, delays[attempt])
+                } else {
+                    pendingPhoneFocusRepair = null
+                }
+            }
         }
         pendingPhoneFocusRepair = repair
-        window.decorView.postDelayed(repair, delayMs)
+        window.decorView.postDelayed(repair, delays[0])
     }
 
     private fun cancelPhoneFocusRepair() {

@@ -9,6 +9,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.Surface
+import com.lateral.MainActivity
 import io.github.muntashirakon.adb.AdbPairingRequiredException
 import io.github.muntashirakon.adb.AdbStream
 import java.io.File
@@ -521,7 +522,12 @@ object PrivilegedService {
 
     // region Privileged-call surface (mirrors ShizukuManager so UxSpaceApp swaps cleanly)
 
-    fun launchApp(displayId: Int, packageName: String, activityName: String) {
+    fun launchApp(
+        displayId: Int,
+        packageName: String,
+        activityName: String,
+        phoneTaskId: Int = -1,
+    ) {
         Log.i(
             "Lateral/Launch",
             "7) PrivilegedService.launchApp pkg=$packageName display=$displayId state=$state",
@@ -542,6 +548,29 @@ object PrivilegedService {
                     "Lateral/Launch",
                     "9) helper returned ok=$ok pkg=$packageName display=$displayId",
                 )
+                if (ok && phoneTaskId >= 0) {
+                    // The shell command can return before the ROM finishes its
+                    // cross-display transition. Re-focus the existing PhoneUI task
+                    // through the whole settling window. CLEAR_TOP|SINGLE_TOP keeps
+                    // this idempotent while the activity itself owns display 0.
+                    val repairDelays = longArrayOf(
+                        0L, 25L, 50L, 75L, 100L, 125L, 150L, 175L, 200L, 225L, 250L,
+                        275L, 300L, 350L, 400L, 450L, 500L, 600L, 750L, 950L, 1_200L,
+                        1_600L, 2_200L,
+                    )
+                    Thread {
+                        var previousDelay = 0L
+                        repairDelays.forEach { delay ->
+                            try {
+                                Thread.sleep(delay - previousDelay)
+                                MainActivity.bringPhoneUiToFrontAfterBeastAction()
+                                previousDelay = delay
+                            } catch (_: InterruptedException) {
+                                return@Thread
+                            }
+                        }
+                    }.apply { name = "lateral-phone-focus-repair" }.start()
+                }
             }.onFailure { Log.e(TAG, "launchApp failed", it) }
         }
     }
