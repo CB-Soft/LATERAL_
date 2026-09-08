@@ -15,6 +15,7 @@ import com.lateral.InputSettings
 import com.lateral.MainActivity
 import com.lateral.privileged.PrivilegedService
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 
 /** Virtual displays outlive a physical Beast mode re-enumeration and accept a new surface. */
 private object RetainedTaskDisplays {
@@ -90,6 +91,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         renderedGeneration = -1
         frameRecoveryAttempts = 0
         outputSurface?.release()
+        configureBuffer(texture, width, height)
         val surface = Surface(texture)
         outputSurface = surface
         onAvailabilityChanged?.invoke(true)
@@ -110,6 +112,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+        configureBuffer(texture, width, height)
         resizeIfNeeded(width, height)
     }
 
@@ -151,7 +154,7 @@ class TaskSurfaceView @JvmOverloads constructor(
             }
             PrivilegedService.setVirtualDisplaySurface(id, surface)
             PrivilegedService.resizeVirtualDisplay(
-                id, width.coerceAtLeast(1), height.coerceAtLeast(1), targetDensityDpi,
+                id, renderWidth(), renderHeight(), targetDensityDpi,
             )
             task?.androidTaskId?.let { taskId ->
                 val phoneTaskId = MainActivity.currentPhoneTaskId()
@@ -223,7 +226,8 @@ class TaskSurfaceView @JvmOverloads constructor(
         val local = localPointForGlobal(globalX, globalY) ?: return false
         onInteraction?.invoke()
         val adjustedScale = adjustPinchScale(scale)
-        val baseSpan = (minOf(width, height) * PINCH_BASE_SPAN_FRACTION).toInt().coerceAtLeast(1)
+        val baseSpan = (minOf(renderWidth(), renderHeight()) * PINCH_BASE_SPAN_FRACTION)
+            .toInt().coerceAtLeast(1)
         val targetSpan = (baseSpan * adjustedScale).toInt().coerceIn(PINCH_MIN_SPAN_PX, PINCH_MAX_SPAN_PX)
         PrivilegedService.pinchOnDisplay(
             id, local.first, local.second, baseSpan, targetSpan, PINCH_DURATION_MS,
@@ -339,10 +343,12 @@ class TaskSurfaceView @JvmOverloads constructor(
         if (!getGlobalVisibleRect(visible) || visible.width() <= 0 || visible.height() <= 0 ||
             (requireInside && !visible.contains(globalX, globalY))
         ) return null
-        val x = ((globalX - visible.left).toFloat() / visible.width() * width)
-            .toInt().coerceIn(0, width - 1)
-        val y = ((globalY - visible.top).toFloat() / visible.height() * height)
-            .toInt().coerceIn(0, height - 1)
+        val targetWidth = renderWidth()
+        val targetHeight = renderHeight()
+        val x = ((globalX - visible.left).toFloat() / visible.width() * targetWidth)
+            .toInt().coerceIn(0, targetWidth - 1)
+        val y = ((globalY - visible.top).toFloat() / visible.height() * targetHeight)
+            .toInt().coerceIn(0, targetHeight - 1)
         return x to y
     }
 
@@ -356,8 +362,8 @@ class TaskSurfaceView @JvmOverloads constructor(
             !surface.isValid || displayId != null
         ) return
         val item = task ?: return
-        val w = width.coerceAtLeast(1)
-        val h = height.coerceAtLeast(1)
+        val w = renderWidth()
+        val h = renderHeight()
         RetainedTaskDisplays.take(item.id)?.let { retainedId ->
             if (!PrivilegedService.ensureHostedDisplayImeRouting(retainedId)) {
                 rejectDisplayForImeRouting(retainedId)
@@ -443,8 +449,8 @@ class TaskSurfaceView @JvmOverloads constructor(
 
     private fun resizeIfNeeded(width: Int, height: Int) {
         val id = displayId ?: return
-        val w = width.coerceAtLeast(1)
-        val h = height.coerceAtLeast(1)
+        val w = renderWidth(width)
+        val h = renderHeight(height)
         if (w == lastWidth && h == lastHeight && targetDensityDpi == lastDensityDpi) return
         lastWidth = w
         lastHeight = h
@@ -488,8 +494,9 @@ class TaskSurfaceView @JvmOverloads constructor(
             val secondaryPressed = event.buttonState and MotionEvent.BUTTON_SECONDARY != 0
             if (event.actionMasked == MotionEvent.ACTION_DOWN && secondaryPressed) {
                 secondaryMouseDown = true
-                secondaryMouseX = event.x.toInt()
-                secondaryMouseY = event.y.toInt()
+                val point = renderPoint(event.x, event.y)
+                secondaryMouseX = point.first
+                secondaryMouseY = point.second
                 return true
             }
             if (secondaryMouseDown) {
@@ -509,13 +516,15 @@ class TaskSurfaceView @JvmOverloads constructor(
             if (event.actionMasked == MotionEvent.ACTION_DOWN && primaryPressed) {
                 primaryMouseDown = true
                 primaryMouseStreamed = false
-                primaryMouseX = event.x.toInt()
-                primaryMouseY = event.y.toInt()
+                val point = renderPoint(event.x, event.y)
+                primaryMouseX = point.first
+                primaryMouseY = point.second
                 return true
             }
             if (primaryMouseDown) {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_MOVE -> {
+                        val point = renderPoint(event.x, event.y)
                         if (!primaryMouseStreamed) {
                             PrivilegedService.injectTouch(
                                 id, primaryMouseX, primaryMouseY, MotionEvent.ACTION_DOWN,
@@ -523,18 +532,19 @@ class TaskSurfaceView @JvmOverloads constructor(
                             primaryMouseStreamed = true
                         }
                         PrivilegedService.injectTouch(
-                            id, event.x.toInt(), event.y.toInt(), MotionEvent.ACTION_MOVE,
+                            id, point.first, point.second, MotionEvent.ACTION_MOVE,
                         )
                     }
                     MotionEvent.ACTION_UP -> {
+                        val point = renderPoint(event.x, event.y)
                         if (primaryMouseStreamed) {
                             PrivilegedService.injectTouch(
-                                id, event.x.toInt(), event.y.toInt(), MotionEvent.ACTION_UP,
+                                id, point.first, point.second, MotionEvent.ACTION_UP,
                             )
                         } else {
                             // A tap crosses the physical Beast display and this hosted
                             // virtual display. Pair the final DOWN/UP in one helper call.
-                            PrivilegedService.clickTouch(id, event.x.toInt(), event.y.toInt())
+                            PrivilegedService.clickTouch(id, point.first, point.second)
                             scheduleEditorProbe(id)
                         }
                         primaryMouseDown = false
@@ -542,8 +552,9 @@ class TaskSurfaceView @JvmOverloads constructor(
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         if (primaryMouseStreamed) {
+                            val point = renderPoint(event.x, event.y)
                             PrivilegedService.injectTouch(
-                                id, event.x.toInt(), event.y.toInt(), MotionEvent.ACTION_CANCEL,
+                                id, point.first, point.second, MotionEvent.ACTION_CANCEL,
                             )
                         }
                         primaryMouseDown = false
@@ -559,7 +570,8 @@ class TaskSurfaceView @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> MotionEvent.ACTION_UP
             else -> MotionEvent.ACTION_CANCEL
         }
-        PrivilegedService.injectTouch(id, event.x.toInt(), event.y.toInt(), action)
+        val point = renderPoint(event.x, event.y)
+        PrivilegedService.injectTouch(id, point.first, point.second, action)
         if (action == MotionEvent.ACTION_UP) {
             scheduleEditorProbe(id)
         }
@@ -615,16 +627,31 @@ class TaskSurfaceView @JvmOverloads constructor(
             event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
         ) {
             onInteraction?.invoke()
+            val point = renderPoint(event.x, event.y)
             PrivilegedService.scrollOnDisplay(
                 id,
-                event.x.toInt(),
-                event.y.toInt(),
+                point.first,
+                point.second,
                 event.getAxisValue(MotionEvent.AXIS_VSCROLL) * InputSettings.scrollSensitivity,
             )
             return true
         }
         return false
     }
+
+    private fun configureBuffer(texture: SurfaceTexture, viewWidth: Int, viewHeight: Int) {
+        texture.setDefaultBufferSize(renderWidth(viewWidth), renderHeight(viewHeight))
+    }
+
+    private fun renderWidth(viewWidth: Int = width): Int =
+        (viewWidth.coerceAtLeast(1) * HostedAppDensity.RENDER_SCALE).roundToInt().coerceAtLeast(1)
+
+    private fun renderHeight(viewHeight: Int = height): Int =
+        (viewHeight.coerceAtLeast(1) * HostedAppDensity.RENDER_SCALE).roundToInt().coerceAtLeast(1)
+
+    private fun renderPoint(x: Float, y: Float): Pair<Int, Int> =
+        (x * HostedAppDensity.RENDER_SCALE).roundToInt().coerceIn(0, renderWidth() - 1) to
+            (y * HostedAppDensity.RENDER_SCALE).roundToInt().coerceIn(0, renderHeight() - 1)
 
     fun release() {
         if (released) return

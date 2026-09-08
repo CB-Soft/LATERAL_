@@ -1918,8 +1918,11 @@ private class BeastTaskCard(
         if (surface.height <= 0) return
         val configuration = phoneAppConfiguration
         val renderedHeight = surface.height * renderedVerticalScale
-        appDensityDpi = (configuration.densityDpi * renderedHeight / configuration.windowHeightPx)
-            .roundToInt()
+        appDensityDpi = HostedAppDensity.calculate(
+            configuration.densityDpi,
+            renderedHeight,
+            configuration.windowHeightPx,
+        )
     }
 
     fun release() = surface.release()
