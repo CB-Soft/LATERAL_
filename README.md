@@ -2,6 +2,12 @@
 
 LATERAL_ is a device-specific dual-display workspace for a Nubia NX789J phone and VITURE Beast glasses. It keeps a purpose-built **PhoneUI** on the phone and a pinned **BeastUI** workspace on the glasses, while treating Android task IDs as the identity of the apps being managed.
 
+## Watch the tutorial
+
+[![Watch the LATERAL_ setup and usage tutorial on YouTube](https://img.youtube.com/vi/iaHQASn_Buw/maxresdefault.jpg)](https://www.youtube.com/watch?v=iaHQASn_Buw)
+
+**[Watch the LATERAL_ tutorial on YouTube →](https://www.youtube.com/watch?v=iaHQASn_Buw)**
+
 Architecture status: the v0.2 design invariants are canonicalized in the
 [architecture charter](docs/ARCHITECTURE_CHARTER.md). The conservative
 [Termux/Box64 Gradle worker contract](termux/README.md) is documented for
