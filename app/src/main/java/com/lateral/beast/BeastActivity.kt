@@ -442,16 +442,19 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppScroll(displayId: Int, x: Int, y: Int, amount: Float): Boolean {
         if (display?.displayId != displayId) return false
+        if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         return cards.values.toList().asReversed().any { it.routeScrollAt(x, y, amount) }
     }
 
     override fun routeAppPinch(displayId: Int, x: Int, y: Int, scale: Float): Boolean {
         if (display?.displayId != displayId) return false
+        if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         return cards.values.toList().asReversed().any { it.routePinchAt(x, y, scale) }
     }
 
     override fun routeAppClick(displayId: Int, x: Int, y: Int, button: Int): Boolean {
         if (display?.displayId != displayId) return false
+        if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         // Fullscreen puts the hosted TextureView over the entire Beast window. Intercept
         // clicks on the shell-owned exit affordance before the app-routing fast path.
         if (button == MotionEvent.BUTTON_PRIMARY && isFullscreenExitHit(x, y)) {
@@ -470,6 +473,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         buttonState: Int,
     ): Boolean {
         if (display?.displayId != displayId) return false
+        if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         if (action == MotionEvent.ACTION_DOWN) {
             routedPointerCard?.cancelRoutedPointer()
             routedPointerCard = null

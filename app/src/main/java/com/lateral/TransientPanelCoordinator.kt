@@ -43,6 +43,15 @@ object TransientPanelCoordinator {
         return Lease(token)
     }
 
+    /**
+     * True while a transient panel owns [displayId]. Direct hosted-app routing must
+     * stand down in this state so Android can dispatch input to the topmost panel
+     * window (or launcher overlay) instead of clicking through to a task beneath it.
+     */
+    fun isActiveOnDisplay(displayId: Int): Boolean = synchronized(this) {
+        active?.displayId == displayId
+    }
+
     private fun releaseToken(token: Long) {
         synchronized(this) {
             if (active?.token == token) active = null
