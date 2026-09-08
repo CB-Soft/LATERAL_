@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         private const val PHONE_DISPLAY_SETTLE_MS = 220L
         private const val PHONE_DISPLAY_REPAIR_DELAY_MS = 250L
         private const val MAX_PHONE_DISPLAY_REPAIR_ATTEMPTS = 12
+        private const val TASK_TRANSACTION_FOCUS_LEASE_MS = 2_800L
         private const val WIRELESS_DEBUGGING_SETTINGS_ACTION =
             "android.settings.WIRELESS_DEBUGGING_SETTINGS"
         private const val SETTINGS_SHOW_FRAGMENT_EXTRA = ":settings:show_fragment"
@@ -99,6 +100,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private var nextPhoneFocusLeaseToken = 1L
     private val phoneFocusLeaseTokens = linkedSetOf<Long>()
     private var beastSearchFocusLease: PhoneWindowFocusLease? = null
+    private var taskTransactionFocusLease: PhoneWindowFocusLease? = null
+    private val releaseTaskTransactionFocus = Runnable {
+        taskTransactionFocusLease?.release()
+        taskTransactionFocusLease = null
+    }
     private var adbBridgeDialog: android.app.AlertDialog? = null
     private var lastPromptedBridgeState: PrivilegedService.State? = null
     private val beastSearchListener: () -> Unit = {
@@ -109,8 +115,12 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private val hostedTextInputListener: () -> Unit = {
         runOnUiThread {
             if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
-            HostedTextInputSession.target?.let(hostedKeyboardController::begin)
-                ?: hostedKeyboardController.end("editor no longer active")
+            HostedTextInputSession.target?.let { target ->
+                // A user selecting an editor ends any restore-only focus lease
+                // immediately so the hosted window can become the IME client.
+                releaseTaskTransactionWindowFocus()
+                hostedKeyboardController.begin(target)
+            } ?: hostedKeyboardController.end("editor no longer active")
         }
     }
     private val workspaceGuard = object : Runnable {
@@ -274,6 +284,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             if (intent.action == ACTION_PHONE_FOCUS_REPAIR) {
                 // Re-fronting PhoneUI is the end of a Beast task transaction. Do not
                 // ensure Beast again here or the two displays can steal focus in a loop.
+                leasePhoneWindowFocusForTaskTransaction()
             } else if (intent.action == ACTION_BEAST_LAUNCHER_SEARCH) {
                 // Beast already owns the open launcher. Re-ensuring it here creates a
                 // second cross-display focus transition and can hide either UI.
@@ -1159,12 +1170,34 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun applyPhoneWindowFocusMode() {
-        // Each Android display has its own focused window. Leaving PhoneUI focusable
-        // keeps touch and injected-key sessions valid without taking focus from BeastUI.
-        window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        if (phoneFocusLeaseTokens.isEmpty()) {
+            // PhoneUI remains touchable, but yielding global window focus lets an
+            // editor hosted on Beast's private display become Android's IME client.
+            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        }
+    }
+
+    private fun leasePhoneWindowFocusForTaskTransaction() {
+        window.decorView.removeCallbacks(releaseTaskTransactionFocus)
+        if (taskTransactionFocusLease == null) {
+            taskTransactionFocusLease = acquirePhoneWindowFocus()
+        }
+        window.decorView.postDelayed(
+            releaseTaskTransactionFocus,
+            TASK_TRANSACTION_FOCUS_LEASE_MS,
+        )
+    }
+
+    private fun releaseTaskTransactionWindowFocus() {
+        window.decorView.removeCallbacks(releaseTaskTransactionFocus)
+        taskTransactionFocusLease?.release()
+        taskTransactionFocusLease = null
     }
 
     private fun resetPhoneWindowFocusLeases() {
+        releaseTaskTransactionWindowFocus()
         phoneFocusLeaseTokens.clear()
         beastSearchFocusLease = null
         applyPhoneWindowFocusMode()
