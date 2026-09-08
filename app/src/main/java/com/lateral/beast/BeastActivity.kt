@@ -204,11 +204,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val privilegedListener: () -> Unit = {
         runOnUiThread {
             if (PrivilegedService.state == PrivilegedService.State.READY) {
-                if (PrivilegedService.imeRoutingState !=
-                    PrivilegedService.ImeRoutingState.UNAVAILABLE
-                ) {
-                    cards.values.forEach(BeastTaskCard::retryImeRouting)
-                }
+                cards.values.forEach(BeastTaskCard::retryImeRouting)
                 syncAndroidTasks()
             }
             renderWorkspace()
@@ -362,7 +358,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun onDisplayAdded(displayId: Int) = keepOnExternalDisplay()
-    override fun onDisplayRemoved(displayId: Int) = keepOnExternalDisplay()
+    override fun onDisplayRemoved(displayId: Int) {
+        keepOnExternalDisplay()
+        if (displayId != display?.displayId && PrivilegedService.state == PrivilegedService.State.READY) {
+            cards.values.forEach(BeastTaskCard::retryImeRouting)
+        }
+    }
     override fun onDisplayChanged(displayId: Int) {
         keepOnExternalDisplay()
         if (displayId == display?.displayId) root.post {
@@ -1386,9 +1387,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun schedulePhoneUiFocusRepair() {
-        longArrayOf(220L, 500L, 900L, 1_400L).forEach { delay ->
-            root.postDelayed({ MainActivity.restorePhoneUiAfterExternalTaskBatch() }, delay)
-        }
+        root.postDelayed({ MainActivity.restorePhoneUiAfterExternalTaskBatch() }, 220L)
     }
 
     private fun restoreWorkspaceFocus() {

@@ -433,12 +433,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                 }
             } ?: false
             if (!resumed && exactTaskId == null) {
-                PrivilegedService.launchApp(
-                    id,
-                    item.packageName,
-                    item.activityName,
-                    MainActivity.currentPhoneTaskId(),
-                )
+                PrivilegedService.launchApp(id, item.packageName, item.activityName)
                 onTaskHosted?.invoke()
             } else if (resumed) {
                 onTaskHosted?.invoke()
@@ -475,10 +470,11 @@ class TaskSurfaceView @JvmOverloads constructor(
         attempts = 0
         val id = displayId
         if (id != null && !PrivilegedService.ensureHostedDisplayImeRouting(id)) {
-            rejectDisplayForImeRouting(id)
-            return
+            PrivilegedService.releaseVirtualDisplay(id)
+            displayId = null
+            launchSent = false
         }
-        if (id == null) createDisplayWhenReady()
+        if (displayId == null) createDisplayWhenReady()
     }
 
     private fun forwardTouch(event: MotionEvent): Boolean {
@@ -718,12 +714,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                     }
                 }
             } else {
-                PrivilegedService.launchApp(
-                    id,
-                    item.packageName,
-                    item.activityName,
-                    MainActivity.currentPhoneTaskId(),
-                )
+                PrivilegedService.launchApp(id, item.packageName, item.activityName)
                 mainHandler.postDelayed({ callback(true) }, RECOVERY_SETTLE_MS)
             }
         }

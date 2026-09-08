@@ -5,8 +5,6 @@ import android.content.Context
 import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Intent
-import android.graphics.Color
-import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioManager
@@ -24,20 +22,14 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
 import android.view.Display
-import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
-import android.view.View
-import android.view.WindowManager
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.system.exitProcess
 
 /**
@@ -79,16 +71,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     private val audioRoutingLock = Any()
     private var audioManager: AudioManager? = null
 
-    /** Shell-owned, display-0-only input shield used during cross-display task moves. */
-    private val phoneGuardHandler by lazy { Handler(Looper.getMainLooper()) }
-    private var phoneGuardWindowManager: WindowManager? = null
-    private var phoneGuardView: View? = null
-    private var phoneGuardAcquiredAt = 0L
-    private var phoneGuardDeadline = 0L
-    private var phoneGuardHolders = 0
-    private val phoneGuardExpiry = Runnable {
-        clearPhoneTouchGuardInternal("absolute timeout")
-    }
+    /** Serializes the short post-transaction focus lease on the helper main loop. */
+    private val phoneFocusHandler by lazy { Handler(Looper.getMainLooper()) }
     private var phoneFocusLeaseGeneration = 0
 
     /** Shizuku instantiates the user service with this constructor when a Context is available. */
@@ -106,8 +90,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun destroy() {
         synchronized(sessionImeLock) { restoreSessionImeInternal("helper shutdown") }
-        clearPhoneTouchGuard()
-        phoneGuardHandler.removeCallbacksAndMessages(null)
+        phoneFocusHandler.removeCallbacksAndMessages(null)
         setBeastMediaRoutingEnabled(false)
         nativeMouse?.close()
         releaseAllDisplays()
@@ -240,9 +223,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         packageName: String,
         activityName: String,
     ): Boolean {
+        val phoneTaskId = phoneUiTaskOnDefaultDisplay()
         Log.i(
             "Lateral/Launch",
-            "11) helper.launchOnDisplay pkg=$packageName/$activityName display=$displayId",
+            "11) helper.launchOnDisplay pkg=$packageName/$activityName display=$displayId " +
+                "phone=$phoneTaskId",
         )
         val ok = runVerbose(
             "am", "start",
@@ -261,6 +246,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             "-f", FLAG_NEW_TASK_MULTIPLE,
         )
         Log.i("Lateral/Launch", "12) am-start returned ok=$ok display=$displayId")
+        if (ok && phoneTaskId != null) schedulePhoneFocusLease(phoneTaskId)
         // ~600 ms after the launch, dump the activity stack for this display so we can
         // see whether the activity actually landed where we asked it to. The dumpsys
         // call is cheap; this only fires once per launch.
@@ -1145,7 +1131,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     override fun restorePhoneTaskIfStillHome(phoneTaskId: Int): Boolean {
         val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
         if (topTaskId == phoneTaskId) {
-            Log.d(TAG, "phone focus repair skipped; PhoneUI already owns display 0")
+            schedulePhoneFocusLease(phoneTaskId)
             return true
         }
 
@@ -1159,22 +1145,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             return false
         }
 
-        // REDMAGIC's startActivityFromRecents can return success without changing
-        // focus when the task is already on display 0. The shell move-stack command
-        // performs the actual focus transaction on this ROM; retain the reflective
-        // path as a fallback for builds where the command is unavailable.
-        val restored = startRecentTaskOnDisplay(phoneTaskId, Display.DEFAULT_DISPLAY) ||
-            bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY)
-        if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) != phoneTaskId) {
-            // Some Android builds keep the task in the default display but do not
-            // make it focused after either task-manager operation. Reordering the
-            // existing activity through ActivityTaskManager is the final, explicit
-            // focus request; CLEAR_TOP|SINGLE_TOP preserves the PhoneUI instance.
-            run(
-                "am", "start", "--display", Display.DEFAULT_DISPLAY.toString(),
-                "-n", PHONE_UI_COMPONENT, "-f", PHONE_UI_REPAIR_FLAGS,
-            )
-        }
+        val restored = focusPhoneTask(phoneTaskId)
+        if (restored) schedulePhoneFocusLease(phoneTaskId)
         Log.i(TAG, "phone focus repair top=Home phone=$phoneTaskId restored=$restored")
         return restored
     }
@@ -1592,218 +1564,76 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     override fun restoreRecentTaskOnDisplay(taskId: Int, displayId: Int): Boolean =
         startRecentTaskOnDisplay(taskId, displayId)
 
-    /**
-     * Cross-display task moves on REDMAGIC can expose Home on display 0 for a traversal.
-     * Keep the phone input-safe while moving the exact task, then restore the existing
-     * PhoneUI task before returning. Guard failure is deliberately fail-open: the task
-     * transaction still runs and reports RESTORE_GUARD_SETUP_FAILED only after the two
-     * placements have succeeded.
-     */
+    /** Move one exact task to Beast while preserving the known PhoneUI task on display 0. */
     override fun restoreTaskPreservingPhoneFocus(
         taskId: Int,
         beastDisplayId: Int,
         phoneTaskId: Int,
     ): Int {
-        // Never take display 0 back from an app the user deliberately selected. The
-        // preservation transaction is conditional on PhoneUI owning that display when
-        // the operation begins; background recovery may still restore the Beast task.
         val phoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
-        val preservePhoneFocus = phoneTopTaskId == phoneTaskId
+        val preservePhoneFocus = observedTasks().any {
+            it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
+                it.packageName == PHONE_UI_PACKAGE && it.className == PHONE_UI_ACTIVITY
+        }
         Log.i(
             TAG,
             "focus transaction target=$taskId->$beastDisplayId phone=$phoneTaskId " +
                 "phoneTop=$phoneTopTaskId preserve=$preservePhoneFocus",
         )
-        val guarded = preservePhoneFocus && acquirePhoneTouchGuard()
-        try {
-            if (!startRecentTaskOnDisplay(taskId, beastDisplayId)) {
-                return RESTORE_TARGET_FAILED
-            }
-
-            if (!preservePhoneFocus) {
-                return if (verifyTargetPlacement(taskId, beastDisplayId)) {
-                    RESTORE_SUCCESS
-                } else {
-                    RESTORE_VERIFICATION_FAILED
-                }
-            }
-
-            // startActivityFromRecents is the only operation which reliably promotes an
-            // already-correct-display task on this ROM. Fall back to the shell move path.
-            val currentPhoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
-            if (currentPhoneTopTaskId == null) {
-                Log.w(TAG, "focus transaction skipped phone recovery; display 0 top is unknown")
-                return if (verifyTargetPlacement(taskId, beastDisplayId)) {
-                    RESTORE_SUCCESS
-                } else {
-                    RESTORE_VERIFICATION_FAILED
-                }
-            }
-            if (currentPhoneTopTaskId != phoneTaskId) {
-                val currentPhoneTop = observedTasks().firstOrNull { it.taskId == currentPhoneTopTaskId }
-                if (currentPhoneTop?.activityType != ACTIVITY_TYPE_HOME) {
-                    Log.i(
-                        TAG,
-                        "focus transaction canceled phone recovery; display 0 top=" +
-                            "$currentPhoneTopTaskId type=${currentPhoneTop?.activityType ?: "unknown"}",
-                    )
-                    return if (verifyTargetPlacement(taskId, beastDisplayId)) {
-                        RESTORE_SUCCESS
-                    } else {
-                        RESTORE_VERIFICATION_FAILED
-                    }
-                }
-            }
-            val phoneRecovered = bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY) ||
-                startRecentTaskOnDisplay(phoneTaskId, Display.DEFAULT_DISPLAY)
-            if (!phoneRecovered) return RESTORE_PHONE_FOCUS_FAILED
-
-            if (!verifyRestorePlacements(taskId, beastDisplayId, phoneTaskId)) {
-                return RESTORE_VERIFICATION_FAILED
-            }
-
-            schedulePhoneFocusLease(phoneTaskId)
-            return if (guarded) RESTORE_SUCCESS else RESTORE_GUARD_SETUP_FAILED
-        } finally {
-            if (preservePhoneFocus) releasePhoneTouchGuard()
+        if (preservePhoneFocus && !focusPhoneTask(phoneTaskId)) {
+            return RESTORE_PHONE_FOCUS_FAILED
         }
+        if (!startRecentTaskOnDisplay(taskId, beastDisplayId)) {
+            return RESTORE_TARGET_FAILED
+        }
+
+        if (!preservePhoneFocus) {
+            return if (verifyTargetPlacement(taskId, beastDisplayId)) {
+                RESTORE_SUCCESS
+            } else {
+                RESTORE_VERIFICATION_FAILED
+            }
+        }
+
+        if (!focusPhoneTask(phoneTaskId)) return RESTORE_PHONE_FOCUS_FAILED
+
+        if (!verifyRestorePlacements(taskId, beastDisplayId, phoneTaskId)) {
+            return RESTORE_VERIFICATION_FAILED
+        }
+
+        schedulePhoneFocusLease(phoneTaskId)
+        return RESTORE_SUCCESS
     }
 
-    override fun clearPhoneTouchGuard() {
-        onPhoneGuardThread(Unit) { clearPhoneTouchGuardInternal("explicit cleanup") }
-    }
-
-    /** Acquire without ever moving an existing deadline. Nested transactions share it. */
-    private fun acquirePhoneTouchGuard(): Boolean = onPhoneGuardThread(false) {
-        val now = SystemClock.uptimeMillis()
-        if (phoneGuardView != null && now < phoneGuardDeadline) {
-            phoneGuardHolders++
-            return@onPhoneGuardThread true
-        }
-        if (phoneGuardView != null) clearPhoneTouchGuardInternal("stale acquisition")
-
-        val displayContext = shellContextForDisplay(Display.DEFAULT_DISPLAY)
-            ?: return@onPhoneGuardThread false
-        val windowManager = displayContext.getSystemService(WindowManager::class.java)
-            ?: return@onPhoneGuardThread false
-        val guard = View(displayContext).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-            isClickable = true
-            isFocusable = false
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setOnTouchListener { _, _ -> true }
-            systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        }
-
-        var installed = false
-        var lastFailure: Throwable? = null
-        for (windowType in intArrayOf(
-            WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        )) {
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                windowType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT,
-            ).apply {
-                title = "LATERAL_ phone transition guard"
-                gravity = Gravity.FILL
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) setFitInsetsTypes(0)
-            }
-            val added = runCatching { windowManager.addView(guard, params) }
-            if (added.isSuccess) {
-                installed = true
-                break
-            }
-            lastFailure = added.exceptionOrNull()
-        }
-        if (!installed) {
-            Log.e(TAG, "phone touch guard unavailable; restore will continue", lastFailure)
-            return@onPhoneGuardThread false
-        }
-
-        phoneGuardWindowManager = windowManager
-        phoneGuardView = guard
-        phoneGuardAcquiredAt = now
-        phoneGuardDeadline = now + PHONE_GUARD_HARD_TIMEOUT_MS
-        phoneGuardHolders = 1
-        // This is intentionally posted before the first task operation. Neither nested
-        // acquisition nor any slow shell command is allowed to move this deadline.
-        phoneGuardHandler.removeCallbacks(phoneGuardExpiry)
-        phoneGuardHandler.postAtTime(phoneGuardExpiry, phoneGuardDeadline)
-        Log.d(TAG, "phone touch guard installed until $phoneGuardDeadline")
-        true
-    }
-
-    private fun releasePhoneTouchGuard() {
-        onPhoneGuardThread(Unit) {
-            if (phoneGuardView == null) return@onPhoneGuardThread
-            phoneGuardHolders = (phoneGuardHolders - 1).coerceAtLeast(0)
-            if (phoneGuardHolders == 0) clearPhoneTouchGuardInternal("transaction finished")
-        }
-    }
-
-    private fun clearPhoneTouchGuardInternal(reason: String) {
-        phoneGuardHandler.removeCallbacks(phoneGuardExpiry)
-        val view = phoneGuardView
-        val manager = phoneGuardWindowManager
-        phoneGuardView = null
-        phoneGuardWindowManager = null
-        phoneGuardAcquiredAt = 0L
-        phoneGuardDeadline = 0L
-        phoneGuardHolders = 0
-        if (view != null && manager != null) {
-            runCatching { manager.removeViewImmediate(view) }
-                .onFailure { Log.w(TAG, "could not remove phone touch guard", it) }
-            Log.d(TAG, "phone touch guard removed: $reason")
-        }
-    }
-
-    private fun <T> onPhoneGuardThread(fallback: T, block: () -> T): T {
-        if (Looper.myLooper() == Looper.getMainLooper()) return runCatching(block).getOrDefault(fallback)
-        val result = AtomicReference(fallback)
-        val latch = CountDownLatch(1)
-        if (!phoneGuardHandler.post {
-                try {
-                    result.set(block())
-                } finally {
-                    latch.countDown()
-                }
-            }
-        ) return fallback
-        return if (latch.await(PHONE_GUARD_MAIN_THREAD_WAIT_MS, TimeUnit.MILLISECONDS)) {
-            result.get()
-        } else {
-            Log.e(TAG, "timed out waiting for phone guard main thread")
-            phoneGuardHandler.post { clearPhoneTouchGuardInternal("main-thread wait timeout") }
-            fallback
-        }
-    }
+    /** Retained as a no-op for AIDL transaction compatibility with already-running clients. */
+    override fun clearPhoneTouchGuard() = Unit
 
     private data class ObservedTask(
         val taskId: Int,
         val displayId: Int,
         val activityType: Int,
+        val packageName: String,
+        val className: String,
     )
 
     private fun observedTasks(): List<ObservedTask> = getTaskSnapshots().mapNotNull { encoded ->
         val fields = encoded.split('\t')
-        if (fields.size < 13 || fields[0] != "v1") return@mapNotNull null
+        if (fields.size < 14 || fields[0] != "v1") return@mapNotNull null
         ObservedTask(
             taskId = fields[1].toIntOrNull() ?: return@mapNotNull null,
             displayId = fields[6].toIntOrNull() ?: return@mapNotNull null,
             activityType = fields[9].toIntOrNull() ?: 0,
+            packageName = fields[12],
+            className = fields[13],
         )
+    }
+
+    private fun phoneUiTaskOnDefaultDisplay(): Int? {
+        val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) ?: return null
+        return observedTasks().firstOrNull {
+            it.taskId == topTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
+                it.packageName == PHONE_UI_PACKAGE && it.className == PHONE_UI_ACTIVITY
+        }?.taskId
     }
 
     private fun verifyRestorePlacements(
@@ -1814,8 +1644,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         repeat(RESTORE_VERIFY_ATTEMPTS) { attempt ->
             val observed = observedTasks()
             val targetCorrect = observed.firstOrNull { it.taskId == taskId }?.displayId == beastDisplayId
-            val phoneCorrect = observed.firstOrNull { it.taskId == phoneTaskId }?.displayId ==
-                Display.DEFAULT_DISPLAY
+            val phoneCorrect = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId
             if (targetCorrect && phoneCorrect) return true
             if (attempt + 1 < RESTORE_VERIFY_ATTEMPTS) SystemClock.sleep(RESTORE_VERIFY_DELAY_MS)
         }
@@ -1837,25 +1666,40 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         return false
     }
 
-    /**
-     * The guard is gone at this point. During late lifecycle/biometric completion only
-     * repair an exposed Home task; SystemUI, credential activities, and user-selected apps
-     * are intentionally left alone.
-     */
+    /** Keep PhoneUI top while a Beast-originated task transition settles. */
     private fun schedulePhoneFocusLease(phoneTaskId: Int) {
         val generation = ++phoneFocusLeaseGeneration
         val expiresAt = SystemClock.uptimeMillis() + PHONE_FOCUS_LEASE_MS
         fun check() {
             if (generation != phoneFocusLeaseGeneration || SystemClock.uptimeMillis() >= expiresAt) return
-            val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
-            val top = observedTasks().firstOrNull { it.taskId == topTaskId }
-            if (top?.activityType == ACTIVITY_TYPE_HOME) {
-                Log.d(TAG, "focus lease repairing transient Home exposure")
-                bringTaskToFront(phoneTaskId, Display.DEFAULT_DISPLAY)
+            val topTaskId = taskOnDisplay(Display.DEFAULT_DISPLAY)
+            if (topTaskId == phoneTaskId) {
+                phoneFocusHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
+                return
             }
-            phoneGuardHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
+            // The lease only exists for a Beast task transaction that began while
+            // PhoneUI owned display 0, so any intervening top task belongs to that
+            // transaction and must not replace PhoneUI.
+            Log.d(TAG, "focus lease repairing display 0 top=$topTaskId")
+            focusPhoneTask(phoneTaskId)
+            phoneFocusHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
         }
-        phoneGuardHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
+        phoneFocusHandler.post(::check)
+    }
+
+    /** Focus an already-running PhoneUI task without moving or recreating it. */
+    private fun focusPhoneTask(phoneTaskId: Int): Boolean {
+        if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
+        runVerbose(
+            "am", "start", "--display", Display.DEFAULT_DISPLAY.toString(),
+            "-n", PHONE_UI_COMPONENT, "-a", PHONE_UI_FOCUS_ACTION,
+            "-f", PHONE_UI_REPAIR_FLAGS,
+        )
+        repeat(RESTORE_VERIFY_ATTEMPTS) { attempt ->
+            if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
+            if (attempt + 1 < RESTORE_VERIFY_ATTEMPTS) SystemClock.sleep(RESTORE_VERIFY_DELAY_MS)
+        }
+        return false
     }
 
     private fun topTaskIdOnDisplay(displayId: Int): Int? {
@@ -2463,10 +2307,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         const val RESTORE_PHONE_FOCUS_FAILED = 2
         const val RESTORE_VERIFICATION_FAILED = 3
         const val RESTORE_GUARD_SETUP_FAILED = 4
-        private const val PHONE_GUARD_HARD_TIMEOUT_MS = 2_000L
-        private const val PHONE_GUARD_MAIN_THREAD_WAIT_MS = 750L
-        private const val PHONE_FOCUS_LEASE_MS = 600L
-        private const val PHONE_FOCUS_LEASE_POLL_MS = 150L
+        private const val PHONE_FOCUS_LEASE_MS = 2_500L
+        private const val PHONE_FOCUS_LEASE_POLL_MS = 25L
         private const val RESTORE_VERIFY_ATTEMPTS = 5
         private const val RESTORE_VERIFY_DELAY_MS = 60L
         private const val ACTIVITY_TYPE_HOME = 2
@@ -2479,7 +2321,10 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         private const val FLAG_NEW_TASK_MULTIPLE = "0x18000000"
 
         /** Existing PhoneUI activity used to reclaim focus after an OEM task race. */
+        private const val PHONE_UI_PACKAGE = "com.lateral"
+        private const val PHONE_UI_ACTIVITY = "com.lateral.MainActivity"
         private const val PHONE_UI_COMPONENT = "com.lateral/.MainActivity"
+        private const val PHONE_UI_FOCUS_ACTION = "com.lateral.action.PHONE_FOCUS_REPAIR"
         private const val PHONE_UI_REPAIR_FLAGS = "0x14000000" // NEW_TASK | CLEAR_TOP
 
         /** Frame spacing for the pinch interpolation in [pinchOnDisplay]. */
