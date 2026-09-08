@@ -20,6 +20,10 @@ internal object HostedAppDensity {
             .coerceIn(MIN_DPI, MAX_DPI)
     }
 
-    fun renderScale(userScale: Float): Float =
-        1f / (DEFAULT_PRESENTATION_SCALE * userScale.coerceIn(.6f, 1.4f))
+    fun renderScale(userScale: Float, supersampling: Float): Float =
+        supersampling.coerceIn(1f, 2f) /
+            (DEFAULT_PRESENTATION_SCALE * userScale.coerceIn(.6f, 1.4f))
+
+    fun supersampledDensity(densityDpi: Int, supersampling: Float): Int =
+        (densityDpi * supersampling.coerceIn(1f, 2f)).roundToInt().coerceIn(MIN_DPI, MAX_DPI)
 }

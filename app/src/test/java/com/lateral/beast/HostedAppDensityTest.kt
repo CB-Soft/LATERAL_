@@ -6,13 +6,23 @@ import org.junit.Test
 class HostedAppDensityTest {
     @Test
     fun `render scale is the inverse of compact presentation scale`() {
-        assertEquals(1f, HostedAppDensity.renderScale(1f) * .78f, .0001f)
+        assertEquals(1f, HostedAppDensity.renderScale(1f, 1f) * .78f, .0001f)
     }
 
     @Test
     fun `user scale adjusts presentation consistently`() {
-        assertEquals(1f, HostedAppDensity.renderScale(1.25f) * .78f * 1.25f, .0001f)
-        assertEquals(1f, HostedAppDensity.renderScale(.75f) * .78f * .75f, .0001f)
+        assertEquals(1f, HostedAppDensity.renderScale(1.25f, 1f) * .78f * 1.25f, .0001f)
+        assertEquals(1f, HostedAppDensity.renderScale(.75f, 1f) * .78f * .75f, .0001f)
+    }
+
+    @Test
+    fun `supersampling preserves effective dp scale`() {
+        val baseDensity = 165
+        val nativeRatio = baseDensity / HostedAppDensity.renderScale(1f, 1f)
+        val highRatio = HostedAppDensity.supersampledDensity(baseDensity, 1.25f) /
+            HostedAppDensity.renderScale(1f, 1.25f)
+
+        assertEquals(nativeRatio, highRatio, .5f)
     }
 
     @Test

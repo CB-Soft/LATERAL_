@@ -48,7 +48,7 @@ class TaskSurfaceView @JvmOverloads constructor(
             field = next
             if (isAvailable) resizeIfNeeded(width, height)
         }
-    var renderScale: Float = HostedAppDensity.renderScale(1f)
+    var renderScale: Float = HostedAppDensity.renderScale(1f, 1.25f)
         set(value) {
             val next = value.coerceIn(.5f, 2.5f)
             if (field == next) return

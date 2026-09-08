@@ -128,6 +128,36 @@ object InputSettingsPanel {
                 })
             })
         }
+        val displaySupersampling = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val valueLabel = TextView(context).apply {
+                typeface = Typeface.MONOSPACE
+                setTextColor(Color.rgb(210, 220, 218))
+            }
+            fun update(value: Float) {
+                valueLabel.text = "Supersampling  ${"%.2f".format(value)}×"
+            }
+            update(InputSettings.displaySupersampling)
+            addView(valueLabel)
+            addView(SeekBar(context).apply {
+                max = 20
+                progress = ((InputSettings.displaySupersampling - 1f) * 20).toInt()
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                        val value = 1f + progress / 20f
+                        InputSettings.setDisplaySupersampling(context, value)
+                        update(value)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(bar: SeekBar) = Unit
+                })
+            })
+            addView(TextView(context).apply {
+                text = "Higher values improve hosted-app edge and text rendering without changing effective size."
+                textSize = 11f
+                setTextColor(Color.rgb(178, 188, 187))
+            })
+        }
         fun appearanceSlider(title: String, ultrawide: Boolean): LinearLayout {
             val row = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             val valueLabel = TextView(context).apply {
@@ -317,6 +347,7 @@ object InputSettingsPanel {
         panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
         panel.addView(hostedAppScale)
+        panel.addView(displaySupersampling)
         panel.addView(appearanceSlider("UI + text scale · Standard", ultrawide = false))
         panel.addView(appearanceSlider("UI + text scale · Ultrawide", ultrawide = true))
         panel.addView(personalizationTitle)

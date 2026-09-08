@@ -27,6 +27,7 @@ object InputSettings {
     private const val KEY_STANDARD_FONT_SCALE = "standard_font_scale"
     private const val KEY_ULTRAWIDE_FONT_SCALE = "ultrawide_font_scale"
     private const val KEY_HOSTED_APP_SCALE = "hosted_app_scale"
+    private const val KEY_SUPERSAMPLING = "display_supersampling"
     private const val KEY_START_MINIMIZED = "start_open_apps_minimized"
     private const val KEY_SHOW_PHONE_TASKBAR = "show_phone_taskbar"
     private const val KEY_CENTER_BOTTOM_CONTROLS = "center_bottom_controls"
@@ -64,6 +65,8 @@ object InputSettings {
     @Volatile var ultrawideFontScale = 1.50f
         private set
     @Volatile var hostedAppScale = 1f
+        private set
+    @Volatile var displaySupersampling = 1.25f
         private set
     @Volatile var startOpenAppsMinimized = true
         private set
@@ -126,6 +129,7 @@ object InputSettings {
         standardFontScale = standardUiScale
         ultrawideFontScale = ultrawideUiScale
         hostedAppScale = prefs.getFloat(KEY_HOSTED_APP_SCALE, 1f).coerceIn(.6f, 1.4f)
+        displaySupersampling = prefs.getFloat(KEY_SUPERSAMPLING, 1.25f).coerceIn(1f, 2f)
         startOpenAppsMinimized = prefs.getBoolean(KEY_START_MINIMIZED, true)
         showPhoneTaskbar = prefs.getBoolean(KEY_SHOW_PHONE_TASKBAR, false)
         val legacyBottomControlsCentered = prefs.getBoolean(KEY_CENTER_BOTTOM_CONTROLS, true)
@@ -195,6 +199,7 @@ object InputSettings {
             fontScale.coerceIn(.5f, 2.0f),
             windowHeightPx.coerceAtLeast(1),
             hostedAppScale,
+            displaySupersampling,
         )
         if (phoneAppDensityDpi == next.densityDpi && phoneFontScale == next.fontScale &&
             phoneAppWindowHeightPx == next.windowHeightPx
@@ -220,9 +225,26 @@ object InputSettings {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putFloat(KEY_HOSTED_APP_SCALE, next).apply()
         phoneConfigurationListeners.forEach {
-            it(PhoneAppConfiguration(phoneAppDensityDpi, phoneFontScale, phoneAppWindowHeightPx, next))
+            it(currentPhoneAppConfiguration())
         }
     }
+
+    fun setDisplaySupersampling(context: Context, value: Float) {
+        val next = value.coerceIn(1f, 2f)
+        if (displaySupersampling == next) return
+        displaySupersampling = next
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putFloat(KEY_SUPERSAMPLING, next).apply()
+        phoneConfigurationListeners.forEach { it(currentPhoneAppConfiguration()) }
+    }
+
+    private fun currentPhoneAppConfiguration() = PhoneAppConfiguration(
+        phoneAppDensityDpi,
+        phoneFontScale,
+        phoneAppWindowHeightPx,
+        hostedAppScale,
+        displaySupersampling,
+    )
 
     fun setAccent(context: Context, hue: Float, saturation: Float) {
         accentHue = ((hue % 360f) + 360f) % 360f
@@ -325,6 +347,7 @@ object InputSettings {
         val fontScale: Float,
         val windowHeightPx: Int,
         val hostedAppScale: Float,
+        val supersampling: Float,
     )
 
     private const val DEFAULT_PHONE_APP_DENSITY_DPI = 240
