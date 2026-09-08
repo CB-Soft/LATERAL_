@@ -6,7 +6,13 @@ import org.junit.Test
 class HostedAppDensityTest {
     @Test
     fun `render scale is the inverse of compact presentation scale`() {
-        assertEquals(1f, HostedAppDensity.RENDER_SCALE * .78f, .0001f)
+        assertEquals(1f, HostedAppDensity.renderScale(1f) * .78f, .0001f)
+    }
+
+    @Test
+    fun `user scale adjusts presentation consistently`() {
+        assertEquals(1f, HostedAppDensity.renderScale(1.25f) * .78f * 1.25f, .0001f)
+        assertEquals(1f, HostedAppDensity.renderScale(.75f) * .78f * .75f, .0001f)
     }
 
     @Test

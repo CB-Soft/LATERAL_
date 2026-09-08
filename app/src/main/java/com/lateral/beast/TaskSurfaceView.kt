@@ -48,6 +48,14 @@ class TaskSurfaceView @JvmOverloads constructor(
             field = next
             if (isAvailable) resizeIfNeeded(width, height)
         }
+    var renderScale: Float = HostedAppDensity.renderScale(1f)
+        set(value) {
+            val next = value.coerceIn(.5f, 2.5f)
+            if (field == next) return
+            field = next
+            surfaceTexture?.let { configureBuffer(it, width, height) }
+            if (isAvailable) resizeIfNeeded(width, height)
+        }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var displayId: Int? = null
@@ -644,14 +652,14 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun renderWidth(viewWidth: Int = width): Int =
-        (viewWidth.coerceAtLeast(1) * HostedAppDensity.RENDER_SCALE).roundToInt().coerceAtLeast(1)
+        (viewWidth.coerceAtLeast(1) * renderScale).roundToInt().coerceAtLeast(1)
 
     private fun renderHeight(viewHeight: Int = height): Int =
-        (viewHeight.coerceAtLeast(1) * HostedAppDensity.RENDER_SCALE).roundToInt().coerceAtLeast(1)
+        (viewHeight.coerceAtLeast(1) * renderScale).roundToInt().coerceAtLeast(1)
 
     private fun renderPoint(x: Float, y: Float): Pair<Int, Int> =
-        (x * HostedAppDensity.RENDER_SCALE).roundToInt().coerceIn(0, renderWidth() - 1) to
-            (y * HostedAppDensity.RENDER_SCALE).roundToInt().coerceIn(0, renderHeight() - 1)
+        (x * renderScale).roundToInt().coerceIn(0, renderWidth() - 1) to
+            (y * renderScale).roundToInt().coerceIn(0, renderHeight() - 1)
 
     fun release() {
         if (released) return

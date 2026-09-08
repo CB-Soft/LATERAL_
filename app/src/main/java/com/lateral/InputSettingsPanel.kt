@@ -103,6 +103,31 @@ object InputSettingsPanel {
             { InputSettings.pinchZoomSensitivity },
             { InputSettings.setPinchZoomSensitivity(context, it) },
         )
+        val hostedAppScale = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val valueLabel = TextView(context).apply {
+                typeface = Typeface.MONOSPACE
+                setTextColor(Color.rgb(210, 220, 218))
+            }
+            fun update(value: Float) {
+                valueLabel.text = "Hosted app scale  ${"%.0f".format(value * 100)}%"
+            }
+            update(InputSettings.hostedAppScale)
+            addView(valueLabel)
+            addView(SeekBar(context).apply {
+                max = 80
+                progress = ((InputSettings.hostedAppScale - .6f) * 100).toInt()
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                        val value = .6f + progress / 100f
+                        InputSettings.setHostedAppScale(context, value)
+                        update(value)
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar) = Unit
+                    override fun onStopTrackingTouch(bar: SeekBar) = Unit
+                })
+            })
+        }
         fun appearanceSlider(title: String, ultrawide: Boolean): LinearLayout {
             val row = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             val valueLabel = TextView(context).apply {
@@ -291,6 +316,7 @@ object InputSettingsPanel {
         panel.addView(showPhoneTaskbar)
         panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
+        panel.addView(hostedAppScale)
         panel.addView(appearanceSlider("UI + text scale · Standard", ultrawide = false))
         panel.addView(appearanceSlider("UI + text scale · Ultrawide", ultrawide = true))
         panel.addView(personalizationTitle)

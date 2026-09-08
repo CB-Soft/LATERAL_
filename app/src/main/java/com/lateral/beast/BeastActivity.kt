@@ -775,6 +775,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             InputSettings.phoneAppDensityDpi,
             InputSettings.phoneFontScale,
             InputSettings.phoneAppWindowHeightPx,
+            InputSettings.hostedAppScale,
         )
 
     /** Converts the logical Beast canvas height into physical panel pixels. */
@@ -1727,7 +1728,7 @@ private class BeastTaskCard(
             field = next
             surface.targetDensityDpi = next
         }
-    var phoneAppConfiguration = InputSettings.PhoneAppConfiguration(240, 1f, 1)
+    var phoneAppConfiguration = InputSettings.PhoneAppConfiguration(240, 1f, 1, 1f)
         set(value) {
             field = value
             updateAppDensityForRenderedHeight()
@@ -1923,6 +1924,7 @@ private class BeastTaskCard(
             renderedHeight,
             configuration.windowHeightPx,
         )
+        surface.renderScale = HostedAppDensity.renderScale(configuration.hostedAppScale)
     }
 
     fun release() = surface.release()

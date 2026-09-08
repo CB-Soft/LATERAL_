@@ -4,8 +4,7 @@ import kotlin.math.roundToInt
 
 /** Density policy for apps rendered inside Beast cards. */
 internal object HostedAppDensity {
-    private const val PRESENTATION_SCALE = .78f
-    const val RENDER_SCALE = 1f / PRESENTATION_SCALE
+    private const val DEFAULT_PRESENTATION_SCALE = .78f
     private const val MIN_DPI = 72
     private const val MAX_DPI = 640
 
@@ -20,4 +19,7 @@ internal object HostedAppDensity {
             .roundToInt()
             .coerceIn(MIN_DPI, MAX_DPI)
     }
+
+    fun renderScale(userScale: Float): Float =
+        1f / (DEFAULT_PRESENTATION_SCALE * userScale.coerceIn(.6f, 1.4f))
 }

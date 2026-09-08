@@ -26,6 +26,7 @@ object InputSettings {
     private const val KEY_ULTRAWIDE_UI_SCALE = "ultrawide_ui_scale"
     private const val KEY_STANDARD_FONT_SCALE = "standard_font_scale"
     private const val KEY_ULTRAWIDE_FONT_SCALE = "ultrawide_font_scale"
+    private const val KEY_HOSTED_APP_SCALE = "hosted_app_scale"
     private const val KEY_START_MINIMIZED = "start_open_apps_minimized"
     private const val KEY_SHOW_PHONE_TASKBAR = "show_phone_taskbar"
     private const val KEY_CENTER_BOTTOM_CONTROLS = "center_bottom_controls"
@@ -61,6 +62,8 @@ object InputSettings {
     @Volatile var standardFontScale = 1.10f
         private set
     @Volatile var ultrawideFontScale = 1.50f
+        private set
+    @Volatile var hostedAppScale = 1f
         private set
     @Volatile var startOpenAppsMinimized = true
         private set
@@ -122,6 +125,7 @@ object InputSettings {
         // Ignore legacy divergent font values and lock text to the same value.
         standardFontScale = standardUiScale
         ultrawideFontScale = ultrawideUiScale
+        hostedAppScale = prefs.getFloat(KEY_HOSTED_APP_SCALE, 1f).coerceIn(.6f, 1.4f)
         startOpenAppsMinimized = prefs.getBoolean(KEY_START_MINIMIZED, true)
         showPhoneTaskbar = prefs.getBoolean(KEY_SHOW_PHONE_TASKBAR, false)
         val legacyBottomControlsCentered = prefs.getBoolean(KEY_CENTER_BOTTOM_CONTROLS, true)
@@ -190,6 +194,7 @@ object InputSettings {
             densityDpi.coerceIn(MIN_PHONE_APP_DENSITY_DPI, MAX_PHONE_APP_DENSITY_DPI),
             fontScale.coerceIn(.5f, 2.0f),
             windowHeightPx.coerceAtLeast(1),
+            hostedAppScale,
         )
         if (phoneAppDensityDpi == next.densityDpi && phoneFontScale == next.fontScale &&
             phoneAppWindowHeightPx == next.windowHeightPx
@@ -206,6 +211,17 @@ object InputSettings {
 
     fun removePhoneAppConfigurationListener(listener: (PhoneAppConfiguration) -> Unit) {
         phoneConfigurationListeners -= listener
+    }
+
+    fun setHostedAppScale(context: Context, value: Float) {
+        val next = value.coerceIn(.6f, 1.4f)
+        if (hostedAppScale == next) return
+        hostedAppScale = next
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putFloat(KEY_HOSTED_APP_SCALE, next).apply()
+        phoneConfigurationListeners.forEach {
+            it(PhoneAppConfiguration(phoneAppDensityDpi, phoneFontScale, phoneAppWindowHeightPx, next))
+        }
     }
 
     fun setAccent(context: Context, hue: Float, saturation: Float) {
@@ -304,7 +320,12 @@ object InputSettings {
         fun isValid(): Boolean = width > 0 && height > 0 && refreshRate > 0
     }
 
-    data class PhoneAppConfiguration(val densityDpi: Int, val fontScale: Float, val windowHeightPx: Int)
+    data class PhoneAppConfiguration(
+        val densityDpi: Int,
+        val fontScale: Float,
+        val windowHeightPx: Int,
+        val hostedAppScale: Float,
+    )
 
     private const val DEFAULT_PHONE_APP_DENSITY_DPI = 240
     private const val MIN_PHONE_APP_DENSITY_DPI = 120
