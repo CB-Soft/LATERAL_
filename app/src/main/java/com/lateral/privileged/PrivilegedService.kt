@@ -843,19 +843,25 @@ object PrivilegedService {
         onWorker { service?.nativePointerButton(displayId, code, pressed) }
 
     /**
-     * Streamed touch injection: one frame at a time, action ∈ {DOWN=0, MOVE=1, UP=2,
+     * Streamed touch injection: one frame at a time, Android action ∈ {DOWN=0, UP=1, MOVE=2,
      * CANCEL=3}. Lets the trackpad surface a touch-move-lift gesture into an app's
      * VirtualDisplay so taps and swipes work the same way they would on a real screen.
      */
     fun injectTouch(displayId: Int, x: Int, y: Int, action: Int) {
         val name = when (action) {
-            0 -> "DOWN"; 1 -> "MOVE"; 2 -> "UP"; 3 -> "CANCEL"; else -> "?($action)"
+            0 -> "DOWN"; 1 -> "UP"; 2 -> "MOVE"; 3 -> "CANCEL"; else -> "?($action)"
         }
         Log.d(TAG, "injectTouch $name @ ($x,$y) display=$displayId")
-        onWorker { service?.injectTouch(displayId, x, y, action) }
+        onWorker { service?.injectTouch(displayId, x, y, TouchActionProtocol.encode(action)) }
     }
 
     fun key(displayId: Int, keyCode: Int) = onWorker { service?.key(displayId, keyCode) }
+    fun nativeKey(displayId: Int, event: android.view.KeyEvent) {
+        val copy = android.view.KeyEvent(event)
+        onWorker {
+            service?.nativeKey(displayId, copy.action, copy.keyCode, copy.repeatCount, copy.metaState, copy.downTime, copy.eventTime)
+        }
+    }
 
     fun text(displayId: Int, value: String) = onWorker { service?.text(displayId, value) }
 

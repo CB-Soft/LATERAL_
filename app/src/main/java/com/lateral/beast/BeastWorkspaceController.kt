@@ -9,6 +9,7 @@ import android.content.Intent
 import android.util.Log
 import android.view.Display
 import com.lateral.MainActivity
+import com.lateral.PhoneView
 import com.lateral.privileged.PrivilegedService
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -53,6 +54,7 @@ object BeastWorkspaceController {
         display: Display,
         action: String = BeastActivity.ACTION_ENSURE_WORKSPACE,
     ): Boolean {
+        if (PhoneView.exiting) return false
         val beastTasks = taskRecords(activity).filter { isBeastTask(it.info) }
         val survivor = beastTasks.maxByOrNull { it.info.taskId }
         beastTasks.filterNot { it === survivor }.forEach { duplicate ->

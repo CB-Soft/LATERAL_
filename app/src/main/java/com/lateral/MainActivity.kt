@@ -57,11 +57,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         @Volatile private var livePhoneTaskId = -1
 
         /** Stable Android identity used by helper-side focus-preserving task transactions. */
-        fun currentPhoneTaskId(): Int = livePhoneTaskId
+        fun currentPhoneTaskId(): Int = if (PhoneView.active) BeastActivity.phoneViewTaskId else livePhoneTaskId
 
         /** REDMAGIC task moves are globally focus-changing; restore PhoneUI once per batch. */
         fun restorePhoneUiAfterExternalTaskBatch() {
-            val taskId = livePhoneTaskId
+            val taskId = currentPhoneTaskId()
             if (taskId >= 0 && PrivilegedService.state == PrivilegedService.State.READY) {
                 PrivilegedService.restorePhoneTaskIfStillHome(taskId)
             }
@@ -115,6 +115,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private val hostedTextInputListener: () -> Unit = {
         runOnUiThread {
             if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
+            if (PhoneView.active) {
+                hostedKeyboardController.end("PhoneView uses native input")
+                return@runOnUiThread
+            }
             HostedTextInputSession.target?.let { target ->
                 // A user selecting an editor ends any restore-only focus lease
                 // immediately so the hosted window can become the IME client.
@@ -242,7 +246,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         PrivilegedService.addListener(privilegedStateListener)
         WorkspaceState.addListener(workspaceStateListener)
         WorkspaceState.addViewportListener(viewportStateListener)
-        PrivilegedService.setHotkeyMonitoringEnabled(true)
+        PrivilegedService.setHotkeyMonitoringEnabled(!PhoneView.active)
         PrivilegedService.ensureRunning()
 
         displayManager = getSystemService(DisplayManager::class.java)
@@ -256,7 +260,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         LauncherSearchSession.addListener(beastSearchListener)
         HostedTextInputSession.addListener(hostedTextInputListener)
         hostedKeyboardController.recoverStaleSession {
-            HostedTextInputSession.target?.let(hostedKeyboardController::begin)
+            if (!PhoneView.active) HostedTextInputSession.target?.let(hostedKeyboardController::begin)
         }
         syncBeastSearchField()
         updateExternalDisplay()

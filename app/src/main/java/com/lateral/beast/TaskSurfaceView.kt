@@ -36,6 +36,7 @@ class TaskSurfaceView @JvmOverloads constructor(
 ) : TextureView(context, attrs), TextureView.SurfaceTextureListener {
     var task: BeastTask? = null
     var onDisplayReady: ((Int) -> Unit)? = null
+    var nativePhoneInput = false
     var onAvailabilityChanged: ((Boolean) -> Unit)? = null
     var onTaskHosted: (() -> Unit)? = null
     var onRestoreFailed: ((PrivilegedService.FocusRestoreResult) -> Unit)? = null
@@ -50,7 +51,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         }
     var renderScale: Float = HostedAppDensity.renderScale(1f, 1.25f)
         set(value) {
-            val next = value.coerceIn(.5f, 2.5f)
+            val next = value.coerceIn(.5f, HostedAppDensity.MAX_RENDER_SCALE)
             if (field == next) return
             field = next
             surfaceTexture?.let { configureBuffer(it, width, height) }
@@ -587,6 +588,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun scheduleEditorProbe(displayId: Int) {
+        if (nativePhoneInput) return
         val generation = ++editorProbeGeneration
         fun probe(attempt: Int) {
             if (released || generation != editorProbeGeneration || this.displayId != displayId) return
@@ -694,6 +696,12 @@ class TaskSurfaceView @JvmOverloads constructor(
         return true
     }
 
+    fun sendNativeKey(event: android.view.KeyEvent): Boolean {
+        val id = displayId ?: return false
+        PrivilegedService.nativeKey(id, event)
+        return true
+    }
+
     fun queryBackAvailability(callback: (Boolean) -> Unit) {
         val id = displayId
         if (id == null) {
@@ -758,7 +766,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     companion object {
         private const val BASE_DISPLAY_DPI = 240
         private const val MIN_DISPLAY_DPI = 72
-        private const val MAX_DISPLAY_DPI = 640
+        private const val MAX_DISPLAY_DPI = HostedAppDensity.MAX_RENDER_DPI
         private const val RETRY_MS = 250L
         private const val MAX_ATTEMPTS = 40
         private const val RECOVERY_SETTLE_MS = 500L

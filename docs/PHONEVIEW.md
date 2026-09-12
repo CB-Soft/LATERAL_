@@ -1,38 +1,31 @@
-# PhoneView: issue log and intended behavior
+# PhoneView — 0.2.11
 
-Recorded 2026-09-12 from the user's on-device testing. Open issues, not verified fixes.
+PhoneView runs the complete BeastUI workspace fullscreen in landscape on the phone, using Android's local mouse and external keyboard. Hosted apps still require the privileged input bridge.
 
-PhoneView is the new name for running the BeastUI workspace fullscreen in landscape on the phone with an external keyboard and mouse. PhoneView uses the phone's native Android cursor and keyboard input instead of LATERAL_'s managed BeastUI cursor and keyboard.
+## Issue log
 
-## Open issues
+- PV-1 — fixed: native primary/secondary buttons and wheel events route through the hosted surface, without the managed cursor or raw input capture. Keyboard events preserve down/up, repeats and modifiers. Trusted hosted displays use independent focus and cannot steal top focus where the OS supports those flags, fixing the input timeout found during emulator testing.
+- PV-2 — fixed: touch remains a touchscreen stream, never a secondary mouse click. Corrected Android UP/MOVE conversion into the helper wire protocol; previously taps remained unfinished and drag streams were confused.
+- PV-3 — fixed: Display settings in both UIs contain the PhoneView toggle. An external alphabetic keyboard and no external display are required. Each eligible connection offers PhoneView once; declining permits manual activation later. Manual exit, Back, keyboard removal or display connection exits PhoneView. External-display handoff waits for surface retention before opening the replacement workspace, and restores PhoneUI if the transition exposes Home.
+- PV-4 — fixed during validation: supersampling clipped at 640 raster DPI / 2.5x render scale. Render-only limits now cover supported density, UI scale and sampling combinations without changing logical content size.
 
-- PV-1: External mouse input is broken. Verify pointer movement, primary and secondary clicks, wheel scrolling, and hosted-app interaction.
-- PV-2: Touchscreen taps produce right clicks. A normal tap must produce primary/touch activation; secondary activation must require the appropriate gesture or mouse button.
-- PV-3: Activation and deactivation are awkward. Replace the persistent BEAST button with a PhoneView toggle in Display settings, accessible from both PhoneUI and BeastUI.
+## Source provenance and scope
 
-## Requested lifecycle
+Recovered over wireless ADB from the Nubia NX789J:
+`/sdcard/Documents/LATERAL_branches/fix/supersampling-and-beastui-display/app/src`.
+Local recovery: `builds-temp/nubia-fix-src` (not committed). The original main/dev exports were older; matching APK class names had not established matching implementations.
 
-- PhoneView is eligible only while an external keyboard is connected and no external display is connected.
-- When that condition becomes true, offer a popup asking whether to view the LATERAL_ workspace on the phone. Declining must leave the traditional mode active.
-- Enabling the Display toggle enters fullscreen landscape PhoneView and switches to native local Android input.
-- Disabling it restores traditional PhoneUI and managed input behavior.
-- Keyboard disconnection or external-display connection automatically exits PhoneView and restores traditional mode; external-display connection hands the workspace back to the external display.
-- Device changes must not create duplicate activities, repeated prompts, stranded overlays, or stale input capture.
+The incomplete embedded BeastWorkspaceView prototype was replaced with a display-0 session of the existing BeastActivity so launcher, task controls, fullscreen and lifecycle share one implementation. Display-panel and control-debouncing changes were recovered; existing density, supersampling and focus fixes were preserved and extended. Unrelated USB/ADB bridge changes and permission removals were not imported.
 
-## Source availability and validation
+Agent controls are absent from main, including its dev build flavor. Managed Termux agent/loop work is preserved on `LATERAL_dev` (8ceb35a, b567b4f). No agent-runtime asset ships in this release.
 
-The imported source snapshots under builds-temp/device-trees match existing main (7bc90b2) and the older development branch (dc53c10), per the import inventory. Inspection found no PhoneView mode or persistent BEAST activation button in those snapshots. However, the stable 0.2.10 APK's saved dex dump contains MainActivity.toggleBeastWorkspace, absent from both source snapshots. The inventory's conclusion that the APKs contain only known source states is therefore unsupported: matching class sets did not establish matching implementations. The newer source that implements the reported on-phone behavior must be located before these issues can be reproduced and repaired faithfully.
+## Validation — 2026-09-12
 
-The existing main display changes include hosted-app density normalization, DPI scale control, and scale-invariant supersampling. Existing fixes include modal input routing and PhoneUI focus preservation. Agent controls are reserved for LATERAL_dev; builds made from main must not expose them, including main's dev flavor.
+- SDK-free stable release build, release lint and 17 unit tests passed: density (9), PhoneView policy (4), touch protocol (2), existing agent policy (2).
+- Signed upgrade installed over the existing stable emulator app without deleting its data. Certificate matches published 0.2.3: SHA-256 `6674ddc08c7e982b1dac995e4ad19d59bf79700c4434cf09737e07c9c04e27cd`. This retains the project's existing Android debug-certificate convention, not a new production keystore.
+- Pixel_9, Android 15/API 35, emulator-5556: simulated external USB keyboard via Android uinput; connection offer; fullscreen landscape; native launcher; manual toggles from both UIs; Back; keyboard disconnect/reconnect; external-display handoff.
+- An emulator-only hosted input receiver verified touchscreen DOWN/UP, primary mouse DOWN/UP, secondary button=2 and button press/release, wheel=-3, and complete mixed-case `PhoneView` key sequences with Shift and no five-second stalls. Mouse injections target display 0 and traverse the real workspace surface/privileged bridge. Earlier candidate ANRs exposed the focus race; those candidates were not released.
+- A live hosted app survived handoff to a 1920x1080/240 simulated external display. BeastUI moved external, PhoneUI remained on display 0, and the hosted virtual display was reused rather than duplicated.
+- Earlier Chrome testing confirmed visible mixed-case editing. Both UIs expose no agent toolbar entry. Test receiver/injector and logs are under ignored `build/`, not in the APK.
 
-Required PhoneView regression scenarios once its source is available: keyboard connect and accept/decline, manual toggle from either UI, keyboard disconnect, display connect/disconnect, touchscreen primary activation, external mouse buttons/wheel, native keyboard typing, repeated mode transitions, and landscape fullscreen exit.
-
-## Validation on 2026-09-12
-
-- Main stableDebug and devDebug SDK-free builds succeeded; all 10 stable unit tests passed, including 8 hosted-display-density tests.
-- Neither main APK contains the managed-agent runtime asset. PhoneUI and BeastUI source expose no agent entry points, including in main's dev flavor.
-- Pixel_9 emulator (API 35, emulator-5556): freshly built main dev APK installed and launched; screenshot confirmed apps/disp/set controls without an agent button. Tapping disp opened Display settings with the expected no-external-display state. No AndroidRuntime crash appeared in the inspected log.
-- Stable APK runtime validation was blocked by INSTALL_FAILED_UPDATE_INCOMPATIBLE against the existing emulator installation. The existing installation was retained.
-- RedMagic_10S_API35 remained offline after snapshot and cold-boot attempts; testing used Pixel_9 instead.
-- PhoneView and hosted input/display regressions are not confirmed: the newer source is missing, and the tested emulator reports NEEDS_PAIRING for LATERAL_'s input bridge.
-- Local smoke-test evidence: build/lateral-main-validation.png and build/lateral-display-validation.xml. These generated artifacts are not committed.
+Emulator checks do not certify physical Nubia mouse/Bluetooth firmware behavior or real VITURE timing switches. Hardware regression remains advisable; no APK was installed on the user's phone. Android versions lacking independent-focus flags retain the existing fallback and were not tested.

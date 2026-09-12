@@ -136,7 +136,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         return try {
             val display = displayManager.createVirtualDisplay(
                 name, width, height, densityDpi, surface,
-                BASE_TRUSTED_DISPLAY_FLAGS or
+                BASE_TRUSTED_DISPLAY_FLAGS or hostedFocusFlags() or
                     (if (destroyContentOnRemoval) VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL else 0),
             )
             if (display == null) {
@@ -341,6 +341,26 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun key(displayId: Int, keyCode: Int) {
         run("input", "-d", displayId.toString(), "keyevent", keyCode.toString())
+    }
+
+    /** Hosted windows need independent focus while the physical workspace receives input.
+     * Resolve hidden flags on the running OS, without guessing bit values on older builds.
+     */
+    private fun hostedFocusFlags(): Int = runCatching {
+        val ownFocus = DisplayManager::class.java.getField("VIRTUAL_DISPLAY_FLAG_OWN_FOCUS").getInt(null)
+        val noSteal = DisplayManager::class.java.getField("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED").getInt(null)
+        ownFocus or noSteal
+    }.getOrDefault(0)
+
+    override fun nativeKey(displayId: Int, action: Int, keyCode: Int, repeatCount: Int, metaState: Int, downTime: Long, eventTime: Long) {
+        if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) return
+        val event = KeyEvent(downTime, eventTime, action, keyCode, repeatCount, metaState,
+            android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        val managerClass = Class.forName("android.hardware.input.InputManager")
+        val manager = managerClass.getMethod("getInstance").invoke(null)
+        event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, displayId)
+        managerClass.getMethod("injectInputEvent", android.view.InputEvent::class.java, Int::class.javaPrimitiveType)
+            .invoke(manager, event, 0)
     }
 
     override fun text(displayId: Int, value: String) {

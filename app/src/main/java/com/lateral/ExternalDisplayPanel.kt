@@ -27,6 +27,8 @@ object ExternalDisplayPanel {
         requestBeastNativeTiming: (Int, Int, Int, (Result<Unit>) -> Unit) -> Unit,
         vitureSdkEnabled: Boolean = true,
         onModalVisibilityChanged: (Boolean) -> Unit = {},
+        onDialogWindowCreated: (android.app.Dialog) -> Unit = {},
+        onDialogWindowDismissed: (android.app.Dialog) -> Unit = {},
     ) {
         val activity = context as? Activity ?: return
         if (activity.isFinishing || activity.isDestroyed) return
@@ -45,6 +47,28 @@ object ExternalDisplayPanel {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(10), dp(20), 0)
         }
+        val phoneView = Switch(context).apply {
+            text = "PhoneView — workspace on phone"
+            isChecked = PhoneView.active
+            isEnabled = PhoneView.eligible || PhoneView.active
+        }
+        val phoneViewHint = TextView(context).apply {
+            text = "Requires an external keyboard and no external display. Disconnecting the keyboard or connecting a display exits PhoneView."
+            setTextColor(Color.rgb(150, 162, 166))
+        }
+        val phoneViewListener: () -> Unit = {
+            phoneView.isEnabled = PhoneView.eligible || PhoneView.active
+            if (phoneView.isChecked != PhoneView.active) phoneView.isChecked = PhoneView.active
+        }
+        PhoneView.addListener(phoneViewListener)
+        phoneView.setOnCheckedChangeListener { _, enabled ->
+            if (enabled != PhoneView.active) {
+                dialog?.dismiss()
+                PhoneView.setEnabled(activity, enabled)
+            }
+        }
+        panel.addView(phoneView)
+        panel.addView(phoneViewHint)
         val displayInfo = TextView(context).apply {
             typeface = Typeface.MONOSPACE
             setTextColor(Color.rgb(210, 220, 218))
@@ -366,12 +390,16 @@ object ExternalDisplayPanel {
                 .setPositiveButton("Done", null)
                 .show()
             onModalVisibilityChanged(true)
+            dialog?.let(onDialogWindowCreated)
             dialog?.setOnDismissListener {
+                PhoneView.removeListener(phoneViewListener)
+                dialog?.let(onDialogWindowDismissed)
                 displayManager?.unregisterDisplayListener(listener)
                 lease.release()
                 onModalVisibilityChanged(false)
             }
         } catch (error: RuntimeException) {
+            PhoneView.removeListener(phoneViewListener)
             displayManager?.unregisterDisplayListener(listener)
             lease.release()
             onModalVisibilityChanged(false)

@@ -15,6 +15,7 @@ class LateralApp : FlorisApplication() {
         super.onCreate()
         agentController = AgentController(this)
         PrivilegedService.init(this)
+        PhoneView.init(this)
         AndroidTaskSynchronizer.init(this)
         PrivilegedService.ensureRunning()
     }

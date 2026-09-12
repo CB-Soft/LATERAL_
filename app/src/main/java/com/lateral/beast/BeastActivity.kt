@@ -50,6 +50,8 @@ import com.lateral.SimpleTextWatcher
 import com.lateral.BarAlignment
 import com.lateral.InputSettings
 import com.lateral.InputSettingsPanel
+import com.lateral.ExternalDisplayPanel
+import com.lateral.PhoneView
 import com.lateral.MainActivity
 import com.lateral.WorkspaceCursor
 import com.lateral.TransientPanelCoordinator
@@ -78,6 +80,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         private val activeInstances = AtomicInteger(0)
         private val resumedInstances = AtomicInteger(0)
         @Volatile private var visibleDisplayId = -1
+        @Volatile var phoneViewTaskId = -1
+            private set
 
         fun isWorkspaceActive(): Boolean = activeInstances.get() > 0
         fun isWorkspaceVisible(): Boolean = resumedInstances.get() > 0
@@ -99,6 +103,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private lateinit var root: FrameLayout
+    private var phoneViewSession = false
+    private val phoneViewListener: () -> Unit = {
+        if (phoneViewSession && !PhoneView.active && !isFinishing) {
+            PhoneView.beginExit()
+            finish()
+        }
+    }
     /** Scales rendered content, including the cursor, but leaves Android's logical input grid intact. */
     private lateinit var aspectLayer: FrameLayout
     private lateinit var workspaceScroll: HorizontalScrollView
@@ -126,6 +137,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var lastScrollAt = 0L
     private var momentumTargetsLauncher = false
     private val controlDebouncer = BeastControlDebouncer()
+    private val beastDisplayModeController by lazy { BeastDisplayModeController(this) }
     private val screenshotController by lazy {
         BeastScreenshotController(
             activity = this,
@@ -246,6 +258,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        phoneViewSession = PhoneView.active && display?.displayId == Display.DEFAULT_DISPLAY
+        if (phoneViewSession) {
+            phoneViewTaskId = taskId
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+        PhoneView.addListener(phoneViewListener)
         // Beast is controlled by PhoneUI or a hardware keyboard. It must never
         // become an IME target on the glasses display.
         window.setSoftInputMode(
@@ -253,6 +271,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
         )
         window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+        if (phoneViewSession) window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
         window.setStatusBarColor(Color.TRANSPARENT)
         window.setNavigationBarColor(Color.TRANSPARENT)
         InputSettings.load(applicationContext)
@@ -300,6 +319,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun onDestroy() {
+        PhoneView.removeListener(phoneViewListener)
+        if (phoneViewTaskId == taskId) phoneViewTaskId = -1
         if (::root.isInitialized) root.removeCallbacks(systemStatusTicker)
         if (::root.isInitialized) root.removeCallbacks(hoverUpdateFrame)
         beastHoverTarget?.let { updateBeastHover(it, false) }
@@ -326,13 +347,14 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         InputSettings.removePhoneAppConfigurationListener(phoneAppConfigurationListener)
         LauncherSearchSession.removeListener(launcherSearchListener)
         PrivilegedService.removeListener(privilegedListener)
-        if (WorkspaceState.hasPendingDisplayModeFocusRestore() || !isFinishing) {
+        if (phoneViewSession || WorkspaceState.hasPendingDisplayModeFocusRestore() || !isFinishing) {
             cards.values.forEach(BeastTaskCard::retainForReattach)
         } else {
             cards.values.forEach(BeastTaskCard::release)
         }
         activeInstances.decrementAndGet()
         super.onDestroy()
+        if (phoneViewSession && PhoneView.exiting) PhoneView.completeExit()
     }
 
     override fun onResume() {
@@ -380,14 +402,31 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (phoneViewSession && launcher.visibility != View.VISIBLE &&
+            !TransientPanelCoordinator.isActiveOnDisplay(Display.DEFAULT_DISPLAY) &&
+            event.keyCode !in setOf(KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
+        ) {
+            cards[WorkspaceState.focusedTaskId]?.let { if (it.sendNativeKey(event)) return true }
+        }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ESCAPE && launcher.visibility == View.VISIBLE) {
             hideLauncher()
             return true
         }
-        if (launcher.visibility != View.VISIBLE && event.action == KeyEvent.ACTION_DOWN) {
+        if (!phoneViewSession && launcher.visibility != View.VISIBLE && event.action == KeyEvent.ACTION_DOWN) {
             cards[WorkspaceState.focusedTaskId]?.let { if (it.sendKey(event.keyCode)) return true }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (::launcher.isInitialized && launcher.visibility == View.VISIBLE) {
+            hideLauncher()
+        } else if (phoneViewSession) {
+            PhoneView.setEnabled(this, false)
+        } else {
+            super.onBackPressed()
+        }
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
@@ -411,6 +450,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Android never receives hover events because Beast's cursor is app-rendered. */
     private fun updateBeastHoverAtCursor() {
+        if (phoneViewSession) return
         if (!::root.isInitialized || root.width <= 0 || root.height <= 0) return
         val state = WorkspaceCursor.position()
         val target = if (state.visible) {
@@ -863,6 +903,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun createCard(task: BeastTask) = BeastTaskCard(this, controlDebouncer).apply {
+        setPhoneDisplay(phoneViewSession)
         uiScale = uiElementScale
         fontScale = uiFontScale
         phoneAppConfiguration = phoneAppConfiguration()
@@ -1078,7 +1119,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         controls.addView(label("→DISPLAY", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(10), 0, uiDp(10), 0)
-            setBeastClick(::moveToExternalDisplay)
+            setBeastClick(::showExternalDisplaySettings)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
         controls.addView(label("SETTINGS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
@@ -1157,6 +1198,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Keep this Activity off the phone if a display-mode transition re-parents it. */
     private fun keepOnExternalDisplay() {
+        if (isFinishing) return
+        if (phoneViewSession) { phoneViewListener(); return }
         val target = findExternalDisplay(this)
         val currentId = display?.displayId
         when {
@@ -1168,7 +1211,90 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private fun showInputSettings() {
         InputSettingsPanel.show(
             context = this,
-            onModalVisibilityChanged = { cursorOverlay.visibility = View.VISIBLE },
+            onModalVisibilityChanged = { visible -> cursorOverlay.visibility = if (phoneViewSession) View.GONE else if (visible) View.INVISIBLE else View.VISIBLE },
+            onDialogWindowCreated = ::attachModalCursorOverlay,
+            onDialogWindowDismissed = ::detachModalCursorOverlay,
+        )
+    }
+
+    private fun showExternalDisplaySettings() {
+        HostedTextInputSession.close()
+        ExternalDisplayPanel.show(
+            context = this,
+            displayProvider = { findExternalDisplay(this) },
+            requestUltrawide = { enabled, complete ->
+                val externalDisplay = findExternalDisplay(this)
+                WorkspaceState.beginDisplayModeSwitch(enabled)
+                val refreshRate = InputSettings.preferredBeastTiming?.refreshRate
+                    ?: externalDisplay?.mode?.refreshRate?.roundToInt()?.takeIf { it > 0 }
+                    ?: 60
+                val height = if (enabled) 1200 else {
+                    externalDisplay?.mode?.physicalHeight?.takeIf { it == 1080 || it == 1200 }
+                        ?: 1200
+                }
+                val timing = InputSettings.BeastTiming(
+                    if (enabled) 3840 else 1920,
+                    height,
+                    refreshRate,
+                )
+                beastDisplayModeController.setNativeTiming(
+                    timing.width,
+                    timing.height,
+                    timing.refreshRate,
+                ) { result ->
+                    result.onSuccess {
+                        InputSettings.setPreferredBeastTiming(applicationContext, timing)
+                    }.onFailure {
+                        WorkspaceState.cancelDisplayModeSwitch()
+                    }
+                    complete(result.map { enabled })
+                }
+            },
+            requestDisplayMode = { display, mode, complete ->
+                WorkspaceState.beginDisplayModeSwitch(mode.physicalWidth >= 3000)
+                PrivilegedService.setUserPreferredDisplayMode(
+                    display.displayId,
+                    mode.physicalWidth,
+                    mode.physicalHeight,
+                    mode.refreshRate,
+                ) { applied ->
+                    if (applied) {
+                        if (beastDisplayModeController.isBeastConnected()) {
+                            InputSettings.setPreferredBeastTiming(
+                                applicationContext,
+                                InputSettings.BeastTiming(
+                                    mode.physicalWidth,
+                                    mode.physicalHeight,
+                                    mode.refreshRate.roundToInt(),
+                                ),
+                            )
+                        }
+                        complete(Result.success(Unit))
+                    } else {
+                        WorkspaceState.cancelDisplayModeSwitch()
+                        complete(Result.failure(IllegalStateException("Display mode was not accepted")))
+                    }
+                }
+            },
+            isBeastDisplay = {
+                BuildConfig.VITURE_SDK_ENABLED && beastDisplayModeController.isBeastConnected()
+            },
+            requestBeastNativeTiming = { width, height, refreshRate, complete ->
+                WorkspaceState.beginDisplayModeSwitch(width >= 3000)
+                beastDisplayModeController.setNativeTiming(width, height, refreshRate) { result ->
+                    result.onSuccess {
+                        InputSettings.setPreferredBeastTiming(
+                            applicationContext,
+                            InputSettings.BeastTiming(width, height, refreshRate),
+                        )
+                    }.onFailure {
+                        WorkspaceState.cancelDisplayModeSwitch()
+                    }
+                    complete(result)
+                }
+            },
+            vitureSdkEnabled = BuildConfig.VITURE_SDK_ENABLED,
+            onModalVisibilityChanged = { visible -> cursorOverlay.visibility = if (phoneViewSession) View.GONE else if (visible) View.INVISIBLE else View.VISIBLE },
             onDialogWindowCreated = ::attachModalCursorOverlay,
             onDialogWindowDismissed = ::detachModalCursorOverlay,
         )
@@ -1176,6 +1302,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Android dialogs are separate windows; mirror the workspace cursor into each one. */
     private fun attachModalCursorOverlay(dialog: Dialog) {
+        if (phoneViewSession) return
         val decor = dialog.window?.decorView as? ViewGroup ?: return
         detachModalCursorOverlay(dialog)
         val overlay = BeastCursorOverlay(
@@ -1202,6 +1329,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Keep the rendered pointer above every dynamically rebuilt BeastUI layer. */
     private fun keepCursorOnTop() {
+        if (phoneViewSession) {
+            if (::cursorOverlay.isInitialized) cursorOverlay.visibility = View.GONE
+            return
+        }
         if (::cursorOverlay.isInitialized && cursorOverlay.parent === aspectLayer) {
             cursorOverlay.bringToFront()
         }
@@ -1337,7 +1468,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showLauncher() {
-        if (!LauncherSearchSession.active) {
+        if (!LauncherSearchSession.active && !phoneViewSession) {
             launcherSubmitSequence = LauncherSearchSession.submitSequence
             LauncherSearchSession.begin()
             // REDMAGIC otherwise inherits this external display for MainActivity's
@@ -1393,6 +1524,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun schedulePhoneUiFocusRepair() {
+        if (phoneViewSession) return
         root.postDelayed({ MainActivity.restorePhoneUiAfterExternalTaskBatch() }, 220L)
     }
 
@@ -1679,7 +1811,7 @@ internal class BeastCursorOverlay(
     }
 }
 
-private class BeastTaskCard(
+internal class BeastTaskCard(
     context: android.content.Context,
     private val controlDebouncer: BeastControlDebouncer,
 ) : FrameLayout(context) {
@@ -1712,6 +1844,9 @@ private class BeastTaskCard(
     private var focused = false
     private var fullscreen = false
     private var backQueryGeneration = 0
+    internal fun setPhoneDisplay(value: Boolean) {
+        surface.nativePhoneInput = value
+    }
     var uiScale = 1f
         set(value) {
             field = value
@@ -1937,6 +2072,7 @@ private class BeastTaskCard(
     fun release() = surface.release()
     fun retainForReattach() = surface.retainForReattach()
     fun sendKey(keyCode: Int) = surface.sendKey(keyCode)
+    fun sendNativeKey(event: KeyEvent) = surface.sendNativeKey(event)
     fun captureBitmap() = surface.captureBitmap()
     fun fullscreenExitControl(): TextView = fullscreenExit
     fun restoreFocus() = surface.requestFocus()
@@ -2079,7 +2215,7 @@ private class BeastTaskCard(
         const val DECORATOR_GEOMETRY_SCALE_MAX = 1.15f
         const val DECORATOR_TEXT_SCALE_MAX = 1.50f
         const val MIN_HOSTED_APP_DPI = 72
-        const val MAX_HOSTED_APP_DPI = 640
+        const val MAX_HOSTED_APP_DPI = HostedAppDensity.MAX_RENDER_DPI
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -2088,20 +2224,4 @@ private class BeastTaskCard(
 
     private fun decoratorTextScale(): Float = fontScale.coerceIn(.85f, DECORATOR_TEXT_SCALE_MAX)
 
-}
-
-/** One gate for all Beast shell actions; hosted app input bypasses it entirely. */
-private class BeastControlDebouncer {
-    private var blockedUntil = SystemClock.uptimeMillis() + DEBOUNCE_MS
-
-    fun submit(action: () -> Unit) {
-        val now = SystemClock.uptimeMillis()
-        if (now < blockedUntil) return
-        blockedUntil = now + DEBOUNCE_MS
-        action()
-    }
-
-    private companion object {
-        const val DEBOUNCE_MS = 320L
-    }
 }

@@ -29,6 +29,7 @@ depend on the phone firmware, so re-test the privileged path after system update
 
 ## What it does
 
+- **PhoneView** runs BeastUI fullscreen in landscape on the phone with an external keyboard and native Android mouse input. Enable it in Display settings when no external display is connected. Keyboard removal or display connection automatically restores traditional mode. See [PhoneView behavior and validation](docs/PHONEVIEW.md).
 - **PhoneUI** provides the touchpad, cursor, app launcher, task navigator, scale controls, and input settings.
 - **BeastUI** is an ordered horizontal workspace for apps on the glasses, with task decorators, taskbar tabs, minimization, fullscreen, screenshots, and a launcher overlay.
 - Android tasks are continuously synchronized into one shared workspace model. Phone-launched apps stay on the phone and appear as entries in BeastUI; apps launched from LATERAL_'s launcher can be hosted on Beast.

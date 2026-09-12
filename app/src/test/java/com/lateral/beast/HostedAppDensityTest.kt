@@ -5,6 +5,15 @@ import org.junit.Test
 
 class HostedAppDensityTest {
     @Test
+    fun `supersampling preserves size at high source density without clipping raster dpi`() {
+        for (density in listOf(320, 420, 560, 640)) {
+            for (sampling in listOf(1f, 1.25f, 1.5f, 2f)) {
+                assertEquals(density.toFloat(), HostedAppDensity.supersampledDensity(density, sampling) / sampling, .5f)
+            }
+        }
+    }
+
+    @Test
     fun `render scale is the inverse of compact presentation scale`() {
         assertEquals(1f, HostedAppDensity.renderScale(1f, 1f) * .78f, .0001f)
     }
