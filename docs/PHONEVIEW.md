@@ -26,3 +26,13 @@ The imported source snapshots under builds-temp/device-trees match existing main
 The existing main display changes include hosted-app density normalization, DPI scale control, and scale-invariant supersampling. Existing fixes include modal input routing and PhoneUI focus preservation. Agent controls are reserved for LATERAL_dev; builds made from main must not expose them, including main's dev flavor.
 
 Required PhoneView regression scenarios once its source is available: keyboard connect and accept/decline, manual toggle from either UI, keyboard disconnect, display connect/disconnect, touchscreen primary activation, external mouse buttons/wheel, native keyboard typing, repeated mode transitions, and landscape fullscreen exit.
+
+## Validation on 2026-09-12
+
+- Main stableDebug and devDebug SDK-free builds succeeded; all 10 stable unit tests passed, including 8 hosted-display-density tests.
+- Neither main APK contains the managed-agent runtime asset. PhoneUI and BeastUI source expose no agent entry points, including in main's dev flavor.
+- Pixel_9 emulator (API 35, emulator-5556): freshly built main dev APK installed and launched; screenshot confirmed apps/disp/set controls without an agent button. Tapping disp opened Display settings with the expected no-external-display state. No AndroidRuntime crash appeared in the inspected log.
+- Stable APK runtime validation was blocked by INSTALL_FAILED_UPDATE_INCOMPATIBLE against the existing emulator installation. The existing installation was retained.
+- RedMagic_10S_API35 remained offline after snapshot and cold-boot attempts; testing used Pixel_9 instead.
+- PhoneView and hosted input/display regressions are not confirmed: the newer source is missing, and the tested emulator reports NEEDS_PAIRING for LATERAL_'s input bridge.
+- Local smoke-test evidence: build/lateral-main-validation.png and build/lateral-display-validation.xml. These generated artifacts are not committed.
