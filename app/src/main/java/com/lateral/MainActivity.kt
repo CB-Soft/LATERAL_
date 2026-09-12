@@ -585,9 +585,6 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         addCommand(controls, "apps") { showPhoneLauncher() }
         addCommand(controls, "disp") { showExternalDisplaySettings() }
         addCommand(controls, "set") { showInputSettings() }
-        if (BuildConfig.FLAVOR == "dev") {
-            addCommand(controls, "agent") { showAgentPanel() }
-        }
 
         beastSearchField = PhoneProxyEditText(this).apply {
             hint = "Beast app search"
@@ -801,16 +798,6 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         val focusLease = acquirePhoneWindowFocus()
         InputSettingsPanel.show(
             context = this,
-            onModalVisibilityChanged = { visible -> if (!visible) focusLease.release() },
-        )
-    }
-
-    private fun showAgentPanel() {
-        HostedTextInputSession.close()
-        val focusLease = acquirePhoneWindowFocus()
-        AgentPanel.show(
-            activity = this,
-            controller = (application as LateralApp).agentController,
             onModalVisibilityChanged = { visible -> if (!visible) focusLease.release() },
         )
     }
