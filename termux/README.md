@@ -1,5 +1,10 @@
 # Termux/Box64 build worker
 
+For the runnable **on-device build → install → observe → repair loop**, its sample,
+and the portable installer, see [loop/README.md](loop/README.md). The loop uses
+native Termux Java/AAPT2 and is separate from the conservative LATERAL_ worker
+contract below; the full LATERAL_ native build is not covered by the sample.
+
 This directory contains the v0.2 delegated-build seam for a Termux environment,
 including Termux setups that execute the JVM/Gradle workload through Box64.
 The worker is intentionally limited to the repository's debug APK build. It is

@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+dist/
+evidence/
+projects/
+env.sh
+toolchain-*.txt
+downloads/
+tools/
+android-sdk/
+gradle-cache/
+sample/.gradle/
+sample/build/
+sample/app/build/
+sample/local.properties
+sample/termux-loop-runs/
+sample/.termux-loop/

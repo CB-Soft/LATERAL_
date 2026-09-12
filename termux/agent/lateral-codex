@@ -1,0 +1,10 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+AGENT_HOME="${LATERAL_AGENT_HOME:-$HOME/lateral-agent}"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+export PATH="$AGENT_HOME/bin:$PREFIX/bin:/system/bin:$PATH"
+export TMPDIR="$PREFIX/tmp"
+export SHELL="$PREFIX/bin/bash"
+export SSL_CERT_FILE="${SSL_CERT_FILE:-$PREFIX/etc/tls/cert.pem}"
+if [ -f "$HOME/termux-gradle-loop/env.sh" ]; then . "$HOME/termux-gradle-loop/env.sh"; fi
+exec "$AGENT_HOME/libexec/codex" "$@"

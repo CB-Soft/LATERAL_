@@ -1,0 +1,36 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+AGENT_HOME="${LATERAL_AGENT_HOME:-$HOME/lateral-agent}"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+export PATH="$AGENT_HOME/bin:$PREFIX/bin:/system/bin:$PATH"
+export TMPDIR="$PREFIX/tmp"
+export SHELL="$PREFIX/bin/bash"
+if [ -f "$HOME/termux-gradle-loop/env.sh" ]; then . "$HOME/termux-gradle-loop/env.sh"; fi
+VERB="${1:-doctor}"
+if [ "$#" -gt 0 ]; then shift; fi
+case "$VERB" in
+  install) exec bash "$AGENT_HOME/source/install.sh" "$@";;
+  login) exec "$AGENT_HOME/bin/lateral-codex" login --device-auth "$@";;
+  codex) exec "$AGENT_HOME/bin/lateral-codex" "$@";;
+  terminal)
+    cd "$AGENT_HOME/projects/workspace"
+    printf 'LATERAL Agent terminal. Run lateral-codex to start Codex.\n'
+    if command -v tmux >/dev/null && [ -t 0 ]; then exec tmux new-session -A -s lateral-agent "$PREFIX/bin/bash"; fi
+    exec "$PREFIX/bin/bash" -i;;
+  start)
+    exec python "$AGENT_HOME/manage_service.py" --home "$AGENT_HOME" "$@";;
+  doctor)
+    printf 'Home: %s\nArchitecture: %s\n' "$AGENT_HOME" "$(uname -m)"
+    "$AGENT_HOME/bin/lateral-codex" --version
+    "$AGENT_HOME/bin/lateral-codex" login status || true
+    python --version
+    git --version
+    printf 'Probing Codex Linux sandbox support...\n'
+    if "$AGENT_HOME/bin/lateral-codex" sandbox linux "$PREFIX/bin/true"; then
+      printf 'Codex Linux sandbox probe passed.\n'
+    else
+      printf 'Codex Linux sandbox is unavailable in this Termux environment. Workspace-write jobs may fail; no bypass was enabled.\n' >&2
+      exit 1
+    fi;;
+  *) printf 'Usage: lateral-agent install|start|terminal|login|codex|doctor\n' >&2; exit 2;;
+esac

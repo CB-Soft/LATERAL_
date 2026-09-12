@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# The installer provides the verified, pinned Gradle 8.9 distribution.
+set -eu
+exec sh "${TERMUX_LOOP_HOME:-$HOME/termux-gradle-loop}/tools/gradle-8.9/bin/gradle" "$@"

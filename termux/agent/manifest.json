@@ -1,0 +1,21 @@
+{
+  "runtimeVersion": 1,
+  "home": "~/lateral-agent",
+  "harness": "Codex CLI",
+  "codexVersion": "0.153.4",
+  "release": "https://github.com/openai/codex/releases/tag/rust-v0.153.4",
+  "architectures": {
+    "x86_64": {
+      "asset": "codex-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "f479424eca092484dc40d87ae28c44f4cc40234a60045d6131e493800d814a30"
+    },
+    "aarch64": {
+      "asset": "codex-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "5cda6182bd94c3a30f2eb63a495489ebf7f691fddb14d70f48c6c1a5071b6cde"
+    }
+  },
+  "servicePort": 8766,
+  "serviceToken": "state/bridge.token",
+  "binary": "bin/lateral-codex",
+  "entrypoint": "bin/lateral-agent"
+}

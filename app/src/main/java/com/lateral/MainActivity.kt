@@ -586,7 +586,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         addCommand(controls, "disp") { showExternalDisplaySettings() }
         addCommand(controls, "set") { showInputSettings() }
         if (BuildConfig.FLAVOR == "dev") {
-            addCommand(controls, "agent") { showAgentPanel() }
+            addCommand(controls, if (BuildConfig.FLAVOR == "dev") "agent terminal" else "agent") { showAgentPanel() }
         }
 
         beastSearchField = PhoneProxyEditText(this).apply {

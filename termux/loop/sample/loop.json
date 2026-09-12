@@ -1,0 +1,9 @@
+{
+  "buildCommand": ["sh", "./gradlew", "--no-daemon", "--console=plain", ":app:assembleDebug"],
+  "apk": "app/build/outputs/apk/debug/app-debug.apk",
+  "package": "com.example.termuxloop",
+  "activity": ".MainActivity",
+  "expectedText": "TERMUX LOOP SOLVED",
+  "settleSeconds": 3,
+  "commandTimeoutSeconds": 900
+}

@@ -22,6 +22,10 @@ object AgentPanel {
         controller: AgentController,
         onModalVisibilityChanged: (Boolean) -> Unit = {},
     ) {
+        if (BuildConfig.FLAVOR == "dev") {
+            AgentTerminalPanel.show(activity, onModalVisibilityChanged)
+            return
+        }
         if (activity.isFinishing || activity.isDestroyed) return
         val density = activity.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()

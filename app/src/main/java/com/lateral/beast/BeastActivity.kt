@@ -50,6 +50,7 @@ import com.lateral.SimpleTextWatcher
 import com.lateral.BarAlignment
 import com.lateral.InputSettings
 import com.lateral.InputSettingsPanel
+import com.lateral.AgentTerminalPanel
 import com.lateral.MainActivity
 import com.lateral.WorkspaceCursor
 import com.lateral.TransientPanelCoordinator
@@ -1048,6 +1049,14 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.rgb(14, 16, 17))
         }
+        if (BuildConfig.FLAVOR == "dev") {
+            controls.addView(label("AGENT", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+                gravity = Gravity.CENTER
+                setPadding(uiDp(10), 0, uiDp(10), 0)
+                contentDescription = "Open Agent Terminal"
+                setBeastClick(::showAgentTerminal)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        }
         controls.addView(label("+APPS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
@@ -1390,6 +1399,16 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         launcherLease = null
         root.requestFocus()
         hideSystemKeyboard()
+    }
+
+    private fun showAgentTerminal() {
+        com.lateral.HostedTextInputSession.close()
+        AgentTerminalPanel.show(
+            activity = this,
+            onModalVisibilityChanged = { cursorOverlay.visibility = View.VISIBLE },
+            onDialogWindowCreated = ::attachModalCursorOverlay,
+            onDialogWindowDismissed = ::detachModalCursorOverlay,
+        )
     }
 
     private fun schedulePhoneUiFocusRepair() {
